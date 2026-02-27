@@ -49,7 +49,7 @@ Then use these commands to build and run an example:
 cmake -E make_directory build
 cmake -E chdir build cmake -DCMAKE_BUILD_TYPE=Release -G Ninja .. 
 cmake --build build 
-cmake -E chdir build/examples/c ./example_lib_opengjk_ce
+cmake -E chdir build/scalar/examples/c ./example_lib_opengjk_ce
 ```
 
 The successful output should be:
@@ -60,15 +60,43 @@ The successful output should be:
 
 However, if you do get an error - any error - please file a bug. Support requests are welcome.
 
-## Build Options
+## CMake Options
 
-OpenGJK supports several CMake options to customize the build:
+OpenGJK supports several build options to customize compilation. Use them by passing `-D<OPTION>=<VALUE>` to cmake:
 
-- `BUILD_EXAMPLE` (default: ON) - Build the C demo example
-- `BUILD_MONO` (default: OFF) - Build C# example (requires Mono)
-- `BUILD_CTYPES` (default: OFF) - Expose symbols for Python ctypes
-- `FORCE_CXX_COMPILER` (default: OFF) - Force C++ compiler for C files (useful for cross-compilation)
-- `SINGLE_PRECISION` (default: OFF) - Use 32-bit floating point instead of 64-bit
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_SIMD=ON -DUSE_32BITS=OFF
+```
+
+### Global Options (root CMakeLists.txt)
+
+| Option | Default | Type | Description |
+|--------|---------|------|-------------|
+| `BUILD_SCALAR` | ON | BOOL | Build scalar (C) implementation |
+| `BUILD_SIMD` | ON | BOOL | Build SIMD (C++ Highway) implementation |
+| `BUILD_GPU` | OFF | BOOL | Build GPU (CUDA) implementation |
+| `BUILD_TESTS` | ON | BOOL | Build unit tests (cmocka, gtest) |
+| `BUILD_EXAMPLES` | ON | BOOL | Build example applications |
+| `USE_32BITS` | ON | BOOL | Use 32-bit float instead of 64-bit double |
+
+### Scalar-specific Options (scalar/CMakeLists.txt)
+
+| Option | Default | Type | Description |
+|--------|---------|------|-------------|
+| `OPENGJK_SCALAR_BUILD_SHARED` | ON | BOOL | Build shared library instead of static-only |
+| `OPENGJK_SCALAR_SINGLE_PRECISION` | OFF | BOOL | Use single precision (float) — *overridden by `USE_32BITS`* |
+
+### SIMD-specific Options (simd/CMakeLists.txt)
+
+| Option | Default | Type | Description |
+|--------|---------|------|-------------|
+| `USE_MINIMAL_SIMD` | OFF | BOOL | Prefer smallest viable SIMD width (128-bit for float, 256-bit for double) instead of widest available |
+
+> **⚠️ Critical Note for Integrators**  
+> When you compile your own code against OpenGJK, ensure that **floating-point precision and macros are consistent** between the library and your code:
+>
+> - Mismatched `USE_32BITS` settings cause link errors or silent ABI incompatibilities
+> - Always use `find_package(opengjk)` in your CMake project to automatically inherit the same flags and defines
 
 ### SIMD Build (simd/)
 
@@ -80,11 +108,6 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build
 ```
-
-SIMD-specific options:
-
-- `OPENGJK_SIMD_USE_FLOAT` - Use 32-bit float (default: 64-bit double)
-- `OPENGJK_SIMD_MINIMAL_WIDTH` - Prefer smallest viable SIMD width
 
 #### Supported SIMD Targets
 
@@ -135,9 +158,8 @@ The successful output should be:
 
 > `Distance between bodies 3.653650`
 
-GPU-specific options:
-- `BUILD_GPU` - Enable GPU build (default: OFF)
-- `USE_32BITS` - Use 32-bit float precision (default: ON)
+GPU-specific notes:
+- The GPU build inherits global options like `USE_32BITS` for precision control (see [Global Options](#global-options-rootcmakelists) above)
 
 See [gpu/README.md](gpu/README.md) for API details, performance benchmarks, and advanced usage.
 
