@@ -266,6 +266,31 @@ def test_2_batch_array():
         print_warning(f"Results differ slightly (max diff: {max_diff:.9f})")
     else:
         print_fail(f"Results differ significantly (max diff: {max_diff:.9f})")
+
+    # CPU verification: run all pairs sequentially against scalar CPU library
+    print(f"\nCPU verification (all {num_pairs} pairs, sequential):")
+    try:
+        import sys as _sys, os as _os
+        _scalar_src = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), '..', '..', '..', 'scalar', 'examples', 'python_ctypes', 'src'))
+        _sys.path.insert(0, _scalar_src)
+        from pyopengjk import compute_minimum_distance as _cpu_gjk
+        start = time.time()
+        cpu_dists = np.array([
+            _cpu_gjk(polytopes1[i].tolist(), polytopes2[i].tolist()).distance
+            for i in range(num_pairs)
+        ])
+        time_cpu = time.time() - start
+        cpu_max_diff = np.max(np.abs(cpu_dists - distances_nonindexed.astype(np.float64)))
+        cpu_mean_diff = np.mean(np.abs(cpu_dists - distances_nonindexed.astype(np.float64)))
+        print(f"  Time: {time_cpu*1000:.2f} ms")
+        print(f"  CPU (double) vs GPU (float) max diff:  {cpu_max_diff:.6f}")
+        print(f"  CPU (double) vs GPU (float) mean diff: {cpu_mean_diff:.6f}")
+        if cpu_max_diff < 1e-4:
+            print_pass(f"CPU and GPU results agree")
+        else:
+            print_warning(f"CPU/GPU diff {cpu_max_diff:.6f} exceeds 1e-4 (may be float vs double precision)")
+    except Exception as e:
+        print_warning(f"CPU verification skipped: {e}")
     print()
 
 
