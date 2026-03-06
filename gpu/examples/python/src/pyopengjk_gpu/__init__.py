@@ -5,6 +5,7 @@ High-performance GJK/EPA algorithms running on NVIDIA GPUs with CUDA.
 """
 
 from .opengjk_gpu import (
+    USE_32BITS,
     PolytopeArray,
     SimplexArray,
     GpuBatch,
@@ -17,6 +18,7 @@ from .opengjk_gpu import (
 
 __version__ = "3.1.0"
 __all__ = [
+    "USE_32BITS",
     "PolytopeArray",
     "SimplexArray",
     "GpuBatch",

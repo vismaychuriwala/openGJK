@@ -12,6 +12,7 @@ This demonstrates:
 import numpy as np
 import time
 from pyopengjk_gpu import (
+    USE_32BITS,
     GpuBatch,
     PolytopeArray,
     IndexedBatch,
@@ -292,22 +293,28 @@ def test_2_batch_array():
         import sys as _sys, os as _os
         _scalar_src = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), '..', '..', '..', 'scalar', 'examples', 'python_ctypes', 'src'))
         _sys.path.insert(0, _scalar_src)
+        import pyopengjk as _pyopengjk
         from pyopengjk import compute_minimum_distance as _cpu_gjk
+        _cpu_prec = "float" if _pyopengjk.USE_32BITS else "double"
+        _gpu_prec = "float" if USE_32BITS else "double"
         start = time.time()
         cpu_dists = np.array([
             _cpu_gjk(polytopes1[i].tolist(), polytopes2[i].tolist()).distance
             for i in range(num_pairs)
         ])
         time_cpu = time.time() - start
-        cpu_max_diff = np.max(np.abs(cpu_dists - distances_nonindexed.astype(np.float64)))
-        cpu_mean_diff = np.mean(np.abs(cpu_dists - distances_nonindexed.astype(np.float64)))
+        common_dtype = np.float32 if (_pyopengjk.USE_32BITS and USE_32BITS) else np.float64
+        cpu_max_diff = np.max(np.abs(cpu_dists.astype(common_dtype) - distances_nonindexed.astype(common_dtype)))
+        cpu_mean_diff = np.mean(np.abs(cpu_dists.astype(common_dtype) - distances_nonindexed.astype(common_dtype)))
         print(f"  Time: {time_cpu*1000:.2f} ms")
-        print(f"  CPU (double) vs GPU (float) max diff:  {cpu_max_diff:.6f}")
-        print(f"  CPU (double) vs GPU (float) mean diff: {cpu_mean_diff:.6f}")
-        if cpu_max_diff < 1e-4:
-            print_pass(f"CPU and GPU results agree")
+        print(f"  CPU ({_cpu_prec}) vs GPU ({_gpu_prec}) max diff:  {cpu_max_diff:.6f}")
+        print(f"  CPU ({_cpu_prec}) vs GPU ({_gpu_prec}) mean diff: {cpu_mean_diff:.6f}")
+        both_float = _pyopengjk.USE_32BITS and USE_32BITS
+        cpu_tol = 1e-3 if both_float else 1e-4
+        if cpu_max_diff < cpu_tol:
+            print_pass(f"CPU and GPU results agree (tolerance {cpu_tol})")
         else:
-            print_warning(f"CPU/GPU diff {cpu_max_diff:.6f} exceeds 1e-4 (may be float vs double precision)")
+            print_warning(f"CPU/GPU diff {cpu_max_diff:.6f} exceeds {cpu_tol}")
     except Exception as e:
         print_warning(f"CPU verification skipped: {e}")
     print()
