@@ -73,6 +73,11 @@ set_target_properties(opengjk_scalar_obj
     POSITION_INDEPENDENT_CODE ON
 )
 
+# Ensure the object library is compiled with the dllexport define so that
+# OPENGJK_EXPORT resolves to __declspec(dllexport) rather than __declspec(dllimport).
+# Safe for static lib too — dllexport is a no-op when statically linked.
+target_compile_definitions(opengjk_scalar_obj PRIVATE opengjk_scalar_EXPORTS)
+
 # Generate export header
 include(GenerateExportHeader)
 
@@ -102,11 +107,16 @@ target_include_directories(opengjk_scalar_static PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
 
-# Generate export header for static lib too
-generate_export_header(opengjk_scalar_static
-    BASE_NAME OPENGJK
-    EXPORT_FILE_NAME opengjk_export.h
-)
+# Consumers of the static lib must not see __declspec(dllimport).
+target_compile_definitions(opengjk_scalar_static PUBLIC OPENGJK_STATIC_DEFINE)
+
+# NOTE: Do not call generate_export_header for the static lib with the same
+# EXPORT_FILE_NAME — it would overwrite the shared lib's header, causing
+# OPENGJK_EXPORT to expand to nothing and stripping all DLL exports.
+# generate_export_header(opengjk_scalar_static
+#     BASE_NAME OPENGJK
+#     EXPORT_FILE_NAME opengjk_export.h
+# )
 
 add_library(openGJK::scalar_static ALIAS opengjk_scalar_static)
 

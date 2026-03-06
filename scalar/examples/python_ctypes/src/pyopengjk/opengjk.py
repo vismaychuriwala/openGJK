@@ -23,14 +23,21 @@ class SIMPLEX(Structure):
 
 
 module_dir = os.path.dirname(__file__)
+_repo_root = os.path.abspath(os.path.join(module_dir, *(['..'] * 5)))
 if os.path.exists(os.path.join(module_dir, "opengjk_ce.dll")):
     path = os.path.join(module_dir, "opengjk_ce.dll")
 elif os.path.exists(os.path.join(module_dir, "libopengjk_ce.so")):
     path = os.path.join(module_dir, "libopengjk_ce.so")
 elif os.path.exists(os.path.join(module_dir, "libopengjk_ce.dylib")):
     path = os.path.join(module_dir, "libopengjk_ce.dylib")
+elif os.path.exists(os.path.join(_repo_root, "build", "scalar", "Release", "opengjk_scalar.dll")):
+    path = os.path.join(_repo_root, "build", "scalar", "Release", "opengjk_scalar.dll")
+elif os.path.exists(os.path.join(_repo_root, "build", "scalar", "libopengjk_scalar.so")):
+    path = os.path.join(_repo_root, "build", "scalar", "libopengjk_scalar.so")
+elif os.path.exists(os.path.join(_repo_root, "build", "scalar", "libopengjk_scalar.dylib")):
+    path = os.path.join(_repo_root, "build", "scalar", "libopengjk_scalar.dylib")
 else:
-    raise RuntimeError("Could not find rego_shared library")
+    raise RuntimeError("Could not find opengjk scalar shared library")
 
 
 opengjk = ctypes.cdll.LoadLibrary(path)
