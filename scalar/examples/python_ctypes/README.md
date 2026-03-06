@@ -4,37 +4,32 @@ This wrapper uses `ctypes` to wrap the full C API for use from Python.
 
 ## Getting Started
 
-To start, build the project with `BUILD_CTYPES` enabled. From the
-project root:
+Build the scalar shared library from the project root:
 
     mkdir build
     cd build
-    cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_CTYPES=1
-    cmake --build .
-    cd ../examples/python_ctypes
-    ls src/pyopengjk/
+    cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_SCALAR=ON -DBUILD_SIMD=OFF -DUSE_32BITS=OFF
+    cmake --build . --config Release
 
-At this point you should see either one of `libopengjk_ce.so`,
-`opengjk_ce.dll`, or `libopengjk_ce.dylib` depending on your OS.
-If not, then something has gone wrong with the build process. Make
-certain `BUILD_CTYPES` is enabled, as that should copy the shared
-library. If present, then proceed with creating a virtual environment
-(posix version shown below):
+The shared library will be placed at:
 
+- Windows: `build/scalar/Release/opengjk_scalar.dll`
+- Linux:   `build/scalar/libopengjk_scalar.so`
+- macOS:   `build/scalar/libopengjk_scalar.dylib`
+
+The Python wrapper searches these locations automatically. Then set up the Python environment:
+
+    cd scalar/examples/python_ctypes
     python -m venv .env
-    . .env/bin/activate
+    . .env/bin/activate        # or .env\Scripts\activate on Windows
     (.env) pip install --upgrade pip
     (.env) pip install -e .[test]
     (.env) pytest test/
-    (.env) pip wheel .
-
-The tests should run (and pass), and then a wheel will be built that
-you can install and use in other Python environments.
 
 ## Usage
 
 The API exposes the `compute_minimum_distance` function, taking as an
-argument two lists of vertices. A `Vertex` type is provided for
+argument two lists of vertices. A `Point3` type is provided for
 convenience, for example:
 
 ```python
@@ -62,11 +57,11 @@ vertices1 = [
     Point3(-6.0, -1.4, -0.2)
 ]
 
-distance, simplex = compute_minimum_distance(vertices0, vertices1)
-print(f"Minimum distance: {distance}")
+result = compute_minimum_distance(vertices0, vertices1)
+print(f"Minimum distance: {result.distance}")
 print("Witness points:")
-print(simplex.witnesses[0])
-print(simplex.witnesses[1])
+print(result.simplex.witnesses[0])
+print(result.simplex.witnesses[1])
 ```
 
 will produce the output:
