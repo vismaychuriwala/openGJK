@@ -14,8 +14,8 @@ import time
 from pyopengjk_gpu import (
     GpuBatch,
     PolytopeArray,
+    IndexedBatch,
     compute_minimum_distance,
-    compute_minimum_distance_indexed
 )
 
 # Global random seed for reproducibility
@@ -234,38 +234,57 @@ def test_2_batch_array():
     distances_nonindexed = result_nonindexed['distances']
     print(f"  Distance range: [{distances_nonindexed.min():.3f}, {distances_nonindexed.max():.3f}]")
 
-    # Method 2: Indexed API - interlace polytopes1 and polytopes2
-    print(f"\nMethod 2: Indexed API (Interlaced)")
+    # Method 2: Indexed API using IndexedBatch
     # Interlace: [p1[0], p2[0], p1[1], p2[1], ...]
     polytopes_interlaced = [p for pair in zip(polytopes1, polytopes2) for p in pair]
-
-    # Create index pairs: [[0,1], [2,3], [4,5], ...]
     pairs = np.array([[2*i, 2*i+1] for i in range(num_pairs)], dtype=np.int32)
 
+    print(f"\nMethod 2: Indexed API (IndexedBatch — pack once, query twice)")
+    pool = IndexedBatch(polytopes_interlaced)
+
+    # Query 1: pairs in original order [i, j]
     start = time.time()
-    bd_interlaced = PolytopeArray(polytopes_interlaced)
-    result_indexed = compute_minimum_distance_indexed(bd_interlaced, pairs)
-    time_indexed = time.time() - start
-    print(f"  Time: {time_indexed*1000:.2f} ms")
+    result_indexed = pool.compute(pairs)
+    time_q1 = time.time() - start
 
     distances_indexed = result_indexed['distances']
-    print(f"  Distance range: [{distances_indexed.min():.3f}, {distances_indexed.max():.3f}]")
+    print(f"  Query 1 (original order):    {time_q1*1000:.2f} ms  "
+          f"range [{distances_indexed.min():.3f}, {distances_indexed.max():.3f}]")
 
-    # Results agreement
-    print(f"\nAgreement:")
+    # Query 2: pairs in a random permutation (different size: first half only)
+    perm = np.random.permutation(num_pairs)
+    pairs_permuted = pairs[perm]
+    start = time.time()
+    result_permuted = pool.compute(pairs_permuted)
+    time_q2 = time.time() - start
+
+    distances_permuted = result_permuted['distances']
+    print(f"  Query 2 (random permutation): {time_q2*1000:.2f} ms  "
+          f"range [{distances_permuted.min():.3f}, {distances_permuted.max():.3f}]")
+
+    # Verify: permuted results reordered must match original
+    print(f"\nAgreement (non-indexed vs indexed):")
     max_diff = np.max(np.abs(distances_nonindexed - distances_indexed))
     mean_diff = np.mean(np.abs(distances_nonindexed - distances_indexed))
-
     print(f"  Max distance difference:  {max_diff:.9f}")
     print(f"  Mean distance difference: {mean_diff:.9f}")
 
     tolerance = 1e-5
     if max_diff < tolerance:
-        print_pass(f"Results match within tolerance ({tolerance})")
+        print_pass(f"Non-indexed vs indexed results match within tolerance ({tolerance})")
     elif max_diff < 1e-3:
         print_warning(f"Results differ slightly (max diff: {max_diff:.9f})")
     else:
         print_fail(f"Results differ significantly (max diff: {max_diff:.9f})")
+
+    # Verify: permuted query must return same distances as original (reordered)
+    print(f"\nConsistency (original order vs permuted order):")
+    perm_max_diff = np.max(np.abs(distances_indexed[perm] - distances_permuted))
+    print(f"  Max difference: {perm_max_diff:.9f}")
+    if perm_max_diff < tolerance:
+        print_pass(f"IndexedBatch returns consistent results regardless of pair ordering")
+    else:
+        print_fail(f"Permuted query inconsistent (max diff: {perm_max_diff:.9f})")
 
     # CPU verification: run all pairs sequentially against scalar CPU library
     print(f"\nCPU verification (all {num_pairs} pairs, sequential):")
