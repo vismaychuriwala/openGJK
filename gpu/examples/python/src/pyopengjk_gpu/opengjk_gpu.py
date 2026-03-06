@@ -19,7 +19,7 @@ from typing import List, Union
 # Precision
 # ============================================================================
 
-USE_32BITS = False  # Must match USE_32BITS compile flag
+USE_32BITS = True  # Must match USE_32BITS compile flag
 
 if USE_32BITS:
     gkFloat = ctypes.c_float
@@ -458,6 +458,67 @@ def _to_polytope_array(v) -> PolytopeArray:
 
 
 # ============================================================================
+# Indexed Batch
+# ============================================================================
+
+class IndexedBatch:
+    """
+    Holds a pool of polytopes for repeated indexed GJK queries.
+
+    Packs vertex data into a contiguous host buffer once at construction.
+    Call compute(pairs) with different pair index arrays — of any size — to
+    run GJK without re-packing vertex data each time.
+
+    Args:
+        polytopes: PolytopeArray, (M, D, 3) ndarray, or list of (V_i, 3) arrays
+    """
+
+    def __init__(self, polytopes: Union['PolytopeArray', np.ndarray, list]):
+        self._bd = _to_polytope_array(polytopes)
+
+    def compute(self, pairs: np.ndarray) -> dict:
+        """
+        Run GJK for the given index pairs.
+
+        Args:
+            pairs: (n_pairs, 2) int32 array of indices into the polytope pool
+
+        Returns:
+            Same keys as GpuBatch.compute_gjk().
+        """
+        pairs = np.asarray(pairs, dtype=np.int32)
+        if pairs.ndim != 2 or pairs.shape[1] != 2:
+            raise ValueError(f"pairs must have shape (n_pairs, 2), got {pairs.shape}")
+        num_pairs = pairs.shape[0]
+
+        pairs_array = (gkCollisionPair * num_pairs)()
+        for i in range(num_pairs):
+            pairs_array[i].idx1 = int(pairs[i, 0])
+            pairs_array[i].idx2 = int(pairs[i, 1])
+
+        simplices = SimplexArray(num_pairs)
+        distances = np.zeros(num_pairs, dtype=DTYPE)
+
+        _lib.compute_minimum_distance_indexed(
+            self._bd.n,
+            num_pairs,
+            self._bd.as_ptr(),
+            ctypes.cast(pairs_array, ctypes.POINTER(gkCollisionPair)),
+            simplices.as_ptr(),
+            distances.ctypes.data_as(ctypes.POINTER(gkFloat)),
+        )
+
+        witnesses1, witnesses2, nvrtx = simplices.extract()
+        return {
+            'distances':     distances,
+            'witnesses1':    witnesses1,
+            'witnesses2':    witnesses2,
+            'is_collision':  np.abs(distances) < 1e-6,
+            'simplex_nvrtx': nvrtx,
+        }
+
+
+# ============================================================================
 # Public API
 # ============================================================================
 
@@ -588,6 +649,7 @@ __all__ = [
     "PolytopeArray",
     "SimplexArray",
     "GpuBatch",
+    "IndexedBatch",
     "compute_minimum_distance",
     "compute_minimum_distance_indexed",
     "compute_epa",
