@@ -17,7 +17,10 @@ The shared library will be placed at:
 - Linux:   `build/scalar/libopengjk_scalar.so`
 - macOS:   `build/scalar/libopengjk_scalar.dylib`
 
-The Python wrapper searches these locations automatically. Then set up the Python environment:
+The Python wrapper searches these locations automatically. For 32-bit precision, build
+with `-DUSE_32BITS=ON` and set `USE_32BITS = True` at the top of `opengjk.py`.
+
+Then set up the Python environment:
 
     cd scalar/examples/python_ctypes
     python -m venv .env

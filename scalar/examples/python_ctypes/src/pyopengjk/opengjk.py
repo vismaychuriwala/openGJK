@@ -1,24 +1,29 @@
 import ctypes
-from ctypes import Structure, POINTER, c_int, c_double
+from ctypes import Structure, POINTER, c_int, c_float, c_double
 import os
 from typing import NamedTuple, Tuple, List
+
+# Must match USE_32BITS compile flag (default: OFF for scalar)
+USE_32BITS = False
+
+gkFloat = c_float if USE_32BITS else c_double
 
 
 class POLYTOPE(Structure):
     _fields_ = [
         ("numpoints", c_int),
-        ("s", c_double * 3),
+        ("s", gkFloat * 3),
         ("s_idx", c_int),
-        ("coord", POINTER(POINTER(c_double)))
+        ("coord", POINTER(POINTER(gkFloat)))
     ]
 
 
 class SIMPLEX(Structure):
     _fields_ = [
         ("nvrtx", c_int),
-        ("vrtx", (c_double * 3) * 4),
+        ("vrtx", (gkFloat * 3) * 4),
         ("vrtx_idx", (c_int * 2) * 4),
-        ("witnesses", (c_double * 3) * 2)
+        ("witnesses", (gkFloat * 3) * 2)
     ]
 
 
@@ -42,7 +47,7 @@ else:
 
 opengjk = ctypes.cdll.LoadLibrary(path)
 
-opengjk.compute_minimum_distance.restype = ctypes.c_double
+opengjk.compute_minimum_distance.restype = gkFloat
 opengjk.compute_minimum_distance.argtypes = [POLYTOPE,
                                              POLYTOPE,
                                              POINTER(SIMPLEX)]
@@ -73,17 +78,17 @@ def compute_minimum_distance(vertices0: List[Point3],
     """
     polytope0 = POLYTOPE()
     polytope0.numpoints = len(vertices0)
-    polytope0.s = (c_double * 3)(0, 0, 0)
-    polytope0.coord = (POINTER(c_double) * len(vertices0))()
+    polytope0.s = (gkFloat * 3)(0, 0, 0)
+    polytope0.coord = (POINTER(gkFloat) * len(vertices0))()
     for i, vertex in enumerate(vertices0):
-        polytope0.coord[i] = (c_double * 3)(*vertex)
+        polytope0.coord[i] = (gkFloat * 3)(*vertex)
 
     polytope1 = POLYTOPE()
     polytope1.numpoints = len(vertices1)
-    polytope1.s = (c_double * 3)(0, 0, 0)
-    polytope1.coord = (POINTER(c_double) * len(vertices1))()
+    polytope1.s = (gkFloat * 3)(0, 0, 0)
+    polytope1.coord = (POINTER(gkFloat) * len(vertices1))()
     for i, vertex in enumerate(vertices1):
-        polytope1.coord[i] = (c_double * 3)(*vertex)
+        polytope1.coord[i] = (gkFloat * 3)(*vertex)
 
     simplex = SIMPLEX()
     simplex.nvrtx = 0
