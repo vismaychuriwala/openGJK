@@ -12,9 +12,9 @@ This demonstrates:
 import numpy as np
 import time
 from pyopengjk_gpu import (
+    GpuBatch,
+    PolytopeArray,
     compute_minimum_distance,
-    compute_epa,
-    compute_gjk_epa,
     compute_minimum_distance_indexed
 )
 
@@ -54,30 +54,27 @@ def print_fail(msg):
     print(f"{Colors.RED}  FAIL: {msg}{Colors.RESET}")
 
 
-def generate_polytope(num_poly, num_verts, offsets=None):
-    """Generate multiple polytopes with random vertices on sphere surfaces (fully vectorized).
+def generate_polytope(num_verts, offset=None):
+    """Generate a single polytope with random vertices on a sphere surface.
 
     Args:
-        num_poly: Number of polytopes to generate
-        num_verts: Number of vertices per polytope
-        offsets: Optional (num_poly, 3) array of offsets. If None, random offsets are generated.
+        num_verts: Number of vertices
+        offset: Optional (3,) offset array. If None, a random offset is used.
 
     Returns:
-        ndarray of shape (num_poly, num_verts, 3)
+        ndarray of shape (num_verts, 3)
     """
-    # If no offsets provided, generate random offsets
-    if offsets is None:
-        offsets = (np.random.rand(num_poly, 3) - 0.5) * 20.0
+    if offset is None:
+        offset = (np.random.rand(3) - 0.5) * 20.0
 
-    # Generate random spherical coordinates for all polytopes at once
-    theta = np.random.rand(num_poly, num_verts) * 2.0 * np.pi
-    phi = np.random.rand(num_poly, num_verts) * np.pi
-    r = 1.0 + np.random.rand(num_poly, num_verts) * 0.5
+    theta = np.random.rand(num_verts) * 2.0 * np.pi
+    phi   = np.random.rand(num_verts) * np.pi
+    r     = 1.0 + np.random.rand(num_verts) * 0.5
 
-    vertices = np.zeros((num_poly, num_verts, 3), dtype=DTYPE)
-    vertices[:, :, 0] = r * np.sin(phi) * np.cos(theta) + offsets[:, 0:1]
-    vertices[:, :, 1] = r * np.sin(phi) * np.sin(theta) + offsets[:, 1:2]
-    vertices[:, :, 2] = r * np.cos(phi) + offsets[:, 2:3]
+    vertices = np.zeros((num_verts, 3), dtype=DTYPE)
+    vertices[:, 0] = r * np.sin(phi) * np.cos(theta) + offset[0]
+    vertices[:, 1] = r * np.sin(phi) * np.sin(theta) + offset[1]
+    vertices[:, 2] = r * np.cos(phi)                 + offset[2]
 
     return vertices
 
@@ -163,8 +160,10 @@ def test_1_simple_gjk():
         [-6.0, -1.4, -0.2]
     ], dtype=DTYPE)
 
-    # Compute distance (wrap in 3D arrays for batch API)
-    result = compute_minimum_distance(polytope1[np.newaxis, :, :], polytope2[np.newaxis, :, :])
+    # Upload to GPU once, then compute
+    bd1 = PolytopeArray([polytope1])
+    bd2 = PolytopeArray([polytope2])
+    result = GpuBatch(bd1, bd2).compute_gjk()
 
     distance = result['distances'][0]
     simplex_nvrtx = result['simplex_nvrtx'][0]
@@ -194,7 +193,7 @@ def test_1_simple_gjk():
 
 
 def test_2_batch_array():
-    """Test 2: Batch array processing and indexed API comparison."""
+    """Test 2: Batch array processing with per-stage timings."""
     print("=" * 70)
     print("Test 2: Batch Array Processing & Indexed API")
     print("=" * 70)
@@ -205,19 +204,32 @@ def test_2_batch_array():
 
     print(f"Generating {num_pairs} random polytope pairs with {num_verts} vertices each...")
 
-    # Generate random polytope pairs using vectorized generation
+    # Generate random polytope pairs
     offsets1 = (np.random.rand(num_pairs, 3) - 0.5) * 10.0
     offsets2 = (np.random.rand(num_pairs, 3) - 0.5) * 10.0
 
-    polytopes1 = generate_polytope(num_pairs, num_verts, offsets1)
-    polytopes2 = generate_polytope(num_pairs, num_verts, offsets2)
+    polytopes1 = [generate_polytope(num_verts, offsets1[i]) for i in range(num_pairs)]
+    polytopes2 = [generate_polytope(num_verts, offsets2[i]) for i in range(num_pairs)]
 
-    # Method 1: Non-indexed API
+    # Method 1: Non-indexed API — time each stage separately
     print(f"\nMethod 1: Non-indexed API")
     start = time.time()
-    result_nonindexed = compute_minimum_distance(polytopes1, polytopes2)
-    time_nonindexed = time.time() - start
-    print(f"  Time: {time_nonindexed*1000:.2f} ms")
+    bd1 = PolytopeArray(polytopes1)
+    bd2 = PolytopeArray(polytopes2)
+    time_pack = time.time() - start
+
+    start = time.time()
+    batch = GpuBatch(bd1, bd2)
+    time_upload = time.time() - start
+
+    start = time.time()
+    result_nonindexed = batch.compute_gjk()
+    time_compute = time.time() - start
+
+    print(f"  Host pack:    {time_pack*1000:.2f} ms")
+    print(f"  GPU upload:   {time_upload*1000:.2f} ms")
+    print(f"  Kernel+copy:  {time_compute*1000:.2f} ms")
+    print(f"  Total:        {(time_pack+time_upload+time_compute)*1000:.2f} ms")
 
     distances_nonindexed = result_nonindexed['distances']
     print(f"  Distance range: [{distances_nonindexed.min():.3f}, {distances_nonindexed.max():.3f}]")
@@ -225,31 +237,28 @@ def test_2_batch_array():
     # Method 2: Indexed API - interlace polytopes1 and polytopes2
     print(f"\nMethod 2: Indexed API (Interlaced)")
     # Interlace: [p1[0], p2[0], p1[1], p2[1], ...]
-    # Shape: (2*num_pairs, num_verts, 3)
-    polytopes_interlaced = np.empty((2 * num_pairs, num_verts, 3), dtype=DTYPE)
-    polytopes_interlaced[0::2] = polytopes1  # Even indices: p1[0], p1[1], ...
-    polytopes_interlaced[1::2] = polytopes2  # Odd indices: p2[0], p2[1], ...
+    polytopes_interlaced = [p for pair in zip(polytopes1, polytopes2) for p in pair]
 
     # Create index pairs: [[0,1], [2,3], [4,5], ...]
     pairs = np.array([[2*i, 2*i+1] for i in range(num_pairs)], dtype=np.int32)
 
     start = time.time()
-    result_indexed = compute_minimum_distance_indexed(polytopes_interlaced, pairs)
+    bd_interlaced = PolytopeArray(polytopes_interlaced)
+    result_indexed = compute_minimum_distance_indexed(bd_interlaced, pairs)
     time_indexed = time.time() - start
     print(f"  Time: {time_indexed*1000:.2f} ms")
 
     distances_indexed = result_indexed['distances']
     print(f"  Distance range: [{distances_indexed.min():.3f}, {distances_indexed.max():.3f}]")
 
-    # Compare results
-    print(f"\nComparison:")
+    # Results agreement
+    print(f"\nAgreement:")
     max_diff = np.max(np.abs(distances_nonindexed - distances_indexed))
     mean_diff = np.mean(np.abs(distances_nonindexed - distances_indexed))
 
-    print(f"  Max distance difference: {max_diff:.9f}")
+    print(f"  Max distance difference:  {max_diff:.9f}")
     print(f"  Mean distance difference: {mean_diff:.9f}")
 
-    # Validation
     tolerance = 1e-5
     if max_diff < tolerance:
         print_pass(f"Results match within tolerance ({tolerance})")
@@ -257,10 +266,6 @@ def test_2_batch_array():
         print_warning(f"Results differ slightly (max diff: {max_diff:.9f})")
     else:
         print_fail(f"Results differ significantly (max diff: {max_diff:.9f})")
-
-    # Performance comparison
-    speedup = time_nonindexed / time_indexed if time_indexed > 0 else 1.0
-    print(f"  Performance: Indexed is {speedup:.2f}x {'faster' if speedup > 1 else 'slower'} than non-indexed")
     print()
 
 
@@ -282,8 +287,10 @@ def test_3_touching_cubes():
         [1, -1, 1], [3, -1, 1], [1, 1, 1], [3, 1, 1]
     ], dtype=DTYPE)
 
-    # Run GJK+EPA (wrap in 3D arrays)
-    result = compute_gjk_epa(cube1[np.newaxis, :, :], cube2[np.newaxis, :, :])
+    bd1 = PolytopeArray([cube1])
+    bd2 = PolytopeArray([cube2])
+    batch = GpuBatch(bd1, bd2, with_epa=True)
+    result = batch.compute_gjk_epa()
 
     print(f"Cube 1: centered at (0, 0, 0), size 2x2x2")
     print(f"Cube 2: centered at (2, 0, 0), size 2x2x2")
@@ -325,8 +332,10 @@ def test_4_epa_overlapping_cubes():
         [0, -1, 1], [2, -1, 1], [0, 1, 1], [2, 1, 1]
     ], dtype=DTYPE)
 
-    # Run GJK+EPA (wrap in 3D arrays)
-    result = compute_gjk_epa(cube1[np.newaxis, :, :], cube2[np.newaxis, :, :])
+    bd1 = PolytopeArray([cube1])
+    bd2 = PolytopeArray([cube2])
+    batch = GpuBatch(bd1, bd2, with_epa=True)
+    result = batch.compute_gjk_epa()
 
     print(f"Cube 1: centered at (0, 0, 0), size 2x2x2")
     print(f"Cube 2: centered at (1, 0, 0), size 2x2x2")
@@ -367,8 +376,10 @@ def test_5_epa_separated_cubes():
         [4, -1, 1], [6, -1, 1], [4, 1, 1], [6, 1, 1]
     ], dtype=DTYPE)
 
-    # Run GJK+EPA (wrap in 3D arrays)
-    result = compute_gjk_epa(cube1[np.newaxis, :, :], cube2[np.newaxis, :, :])
+    bd1 = PolytopeArray([cube1])
+    bd2 = PolytopeArray([cube2])
+    batch = GpuBatch(bd1, bd2, with_epa=True)
+    result = batch.compute_gjk_epa()
 
     print(f"Cube 1: centered at (0, 0, 0), size 2x2x2")
     print(f"Cube 2: centered at (5, 0, 0), size 2x2x2")
@@ -408,9 +419,12 @@ def test_6_epa_overlapping_spheres():
     sphere1 = generate_sphere_surface(num_points, radius, 0.0, 0.0, 0.0)
     sphere2 = generate_sphere_surface(num_points, radius, 1.0, 0.0, 0.0)
 
-    # Run GJK+EPA with contact normals (wrap in 3D arrays)
-    result_gjk_epa = compute_gjk_epa(sphere1[np.newaxis, :, :], sphere2[np.newaxis, :, :])
-    result_epa = compute_epa(sphere1[np.newaxis, :, :], sphere2[np.newaxis, :, :], return_normals=True)
+    # Upload once, run both GJK+EPA and EPA on the same batch
+    bd1 = PolytopeArray([sphere1])
+    bd2 = PolytopeArray([sphere2])
+    batch = GpuBatch(bd1, bd2, with_epa=True)
+    result_gjk_epa = batch.compute_gjk_epa()
+    result_epa = batch.compute_epa()
 
     print(f"Sphere 1: centered at (0, 0, 0), radius {radius}")
     print(f"Sphere 2: centered at (1, 0, 0), radius {radius}")
@@ -475,14 +489,13 @@ def test_7_overlapping_polytopes_50_verts():
     # Generate polytopes that overlap
     # Polytope 1: centered at (0, 0, 0)
     # Polytope 2: centered at (0.5, 0, 0) - overlaps with polytope 1
-    offsets1 = np.array([[0.0, 0.0, 0.0]], dtype=DTYPE)
-    offsets2 = np.array([[0.5, 0.0, 0.0]], dtype=DTYPE)
+    polytope1 = generate_polytope(num_verts, np.array([0.0, 0.0, 0.0], dtype=DTYPE))
+    polytope2 = generate_polytope(num_verts, np.array([0.5, 0.0, 0.0], dtype=DTYPE))
 
-    polytope1 = generate_polytope(1, num_verts, offsets1)[0]
-    polytope2 = generate_polytope(1, num_verts, offsets2)[0]
-
-    # Run GJK+EPA
-    result = compute_gjk_epa(polytope1[np.newaxis, :, :], polytope2[np.newaxis, :, :])
+    bd1 = PolytopeArray([polytope1])
+    bd2 = PolytopeArray([polytope2])
+    batch = GpuBatch(bd1, bd2, with_epa=True)
+    result = batch.compute_gjk_epa()
 
     distance = result['distances'][0]
     simplex_nvrtx = result['simplex_nvrtx'][0]
@@ -552,9 +565,11 @@ def test_8_epa_rotated_cubes():
         # Translate
         cube2[i] = [x + 1.0, y, z]
 
-    # Run GJK+EPA
     print("Running GJK+EPA...")
-    result = compute_gjk_epa(cube1[np.newaxis, :, :], cube2[np.newaxis, :, :])
+    bd1 = PolytopeArray([cube1])
+    bd2 = PolytopeArray([cube2])
+    batch = GpuBatch(bd1, bd2, with_epa=True)
+    result = batch.compute_gjk_epa()
 
     distance = result['distances'][0]
     simplex_nvrtx = result['simplex_nvrtx'][0]
@@ -606,17 +621,19 @@ def test_9_epa_separate_gjk_epa():
     sphere1 = generate_sphere_surface(num_points, radius, 0.0, 0.0, 0.0)
     sphere2 = generate_sphere_surface(num_points, radius, 1.0, 0.0, 0.0)
 
+    bd1 = PolytopeArray([sphere1])
+    bd2 = PolytopeArray([sphere2])
+    batch = GpuBatch(bd1, bd2, with_epa=True)
+
     print(f"\nRunning GPU GJK...")
-    # Run GJK first
-    result_gjk = compute_minimum_distance(sphere1[np.newaxis, :, :], sphere2[np.newaxis, :, :])
+    result_gjk = batch.compute_gjk()
 
     print(f"GJK Results:")
     print(f"  Simplex vertices: {result_gjk['simplex_nvrtx'][0]}")
     print(f"  Distance: {result_gjk['distances'][0]:.6f}")
 
     print(f"\nRunning GPU EPA...")
-    # Run EPA separately (with contact normals)
-    result_epa = compute_epa(sphere1[np.newaxis, :, :], sphere2[np.newaxis, :, :], return_normals=True)
+    result_epa = batch.compute_epa()
 
     distance = result_epa['penetration_depths'][0]
     witness1 = result_epa['witnesses1'][0]

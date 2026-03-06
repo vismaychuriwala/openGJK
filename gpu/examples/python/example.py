@@ -1,12 +1,18 @@
 """
 Simple collision example using openGJK GPU Python wrapper.
 
-This demonstrates basic usage with a single collision pair
-(same polytopes as userP.dat and userQ.dat from the C example).
+Demonstrates the mid-level API:
+  PolytopeArray  - packs vertex data into a contiguous buffer and builds
+                   gkPolytope structs pointing into it (host side).
+  GpuBatch       - uploads polytope data to GPU once (allocate_and_copy_device_arrays),
+                   then compute_gjk() just launches the kernel and copies results back.
+                   Re-use the same batch to avoid repeated upload overhead.
+
+Same polytopes as userP.dat and userQ.dat from the C example.
 """
 
 import numpy as np
-from pyopengjk_gpu import compute_minimum_distance
+from pyopengjk_gpu import GpuBatch, PolytopeArray
 
 
 def main():
@@ -44,8 +50,11 @@ def main():
     print(f"Polytope 2: {len(polytope2)} vertices")
     print()
 
-    # Compute minimum distance using GPU
-    result = compute_minimum_distance(polytope1[np.newaxis, :, :], polytope2[np.newaxis, :, :])
+    # Upload polytopes to GPU once, then compute
+    bd1 = PolytopeArray([polytope1])
+    bd2 = PolytopeArray([polytope2])
+    batch = GpuBatch(bd1, bd2)
+    result = batch.compute_gjk()
 
     distance = result['distances'][0]
     witness1 = result['witnesses1'][0]
