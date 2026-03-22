@@ -1,8 +1,7 @@
 """
-openGJK GPU - High-performance Python wrapper using NumPy
+openGJK GPU - Python wrapper
 
-GPU-accelerated GJK/EPA collision detection library for batch processing.
-Optimized for performance with NumPy arrays and vectorized operations.
+GPU-accelerated GJK collision detection library for batch processing.
 
 Copyright 2022-2026 Mattia Montanari, University of Oxford
 Copyright 2025-2026 Vismay Churiwala, Marcus Hedlund
@@ -13,16 +12,14 @@ import ctypes
 import os
 import sys
 import numpy as np
-from typing import List, Tuple, Dict, Union
+from typing import List, Union
 
 
 # ============================================================================
-# Determine precision and load library
+# Precision
 # ============================================================================
 
-# Check if library was built with 32-bit precision
-# This should match the USE_32BITS flag used during compilation
-USE_32BITS = True  # Default for GPU build
+USE_32BITS = True  # Must match USE_32BITS compile flag
 
 if USE_32BITS:
     gkFloat = ctypes.c_float
@@ -37,49 +34,36 @@ else:
 # ============================================================================
 
 class gkPolytope(ctypes.Structure):
-    """
-    GPU polytope structure.
-
-    Note: coord must be a flattened array [x0,y0,z0, x1,y1,z1, ...]
-    for efficient GPU memory access (coalescing).
-    """
     _fields_ = [
         ("numpoints", ctypes.c_int),
-        ("s", gkFloat * 3),
-        ("s_idx", ctypes.c_int),
-        ("coord", ctypes.POINTER(gkFloat))
+        ("s",         gkFloat * 3),
+        ("s_idx",     ctypes.c_int),
+        ("coord",     ctypes.POINTER(gkFloat)),
     ]
 
 
 class gkSimplex(ctypes.Structure):
-    """GJK simplex structure containing closest points and witness information."""
     _fields_ = [
-        ("nvrtx", ctypes.c_int),
-        ("vrtx", (gkFloat * 3) * 4),
-        ("vrtx_idx", (ctypes.c_int * 2) * 4),
-        ("witnesses", (gkFloat * 3) * 2)
+        ("nvrtx",     ctypes.c_int),
+        ("vrtx",      (gkFloat * 3) * 4),
+        ("vrtx_idx",  (ctypes.c_int * 2) * 4),
+        ("witnesses", (gkFloat * 3) * 2),
     ]
 
 
 class gkCollisionPair(ctypes.Structure):
-    """Index pair for indexed collision detection."""
     _fields_ = [
         ("idx1", ctypes.c_int),
-        ("idx2", ctypes.c_int)
+        ("idx2", ctypes.c_int),
     ]
 
 
 # ============================================================================
-# Load Shared Library
+# Load Library
 # ============================================================================
 
 def _find_library():
-    """Find the openGJK_GPU shared library."""
     module_dir = os.path.dirname(os.path.abspath(__file__))
-
-    # Search paths (in order of preference)
-    # File is at: gpu/examples/python/src/pyopengjk_gpu/opengjk_gpu.py
-    # Build output: build/gpu/Release/openGJK_GPU.dll
     search_paths = [
         module_dir,
         os.path.join(module_dir, "..", "..", "..", "..", "..", "build", "gpu", "Release"),
@@ -87,8 +71,6 @@ def _find_library():
         os.path.join(module_dir, "..", "..", "..", "..", "Release"),
         os.path.join(module_dir, "..", "..", "..", ".."),
     ]
-
-    # Library names to try
     if sys.platform == "win32":
         lib_names = ["openGJK_GPU.dll"]
     elif sys.platform == "darwin":
@@ -96,465 +78,580 @@ def _find_library():
     else:
         lib_names = ["libopenGJK_GPU.so"]
 
-    # Search for library
-    for search_path in search_paths:
-        for lib_name in lib_names:
-            lib_path = os.path.join(search_path, lib_name)
-            if os.path.exists(lib_path):
-                return lib_path
+    for path in search_paths:
+        for name in lib_names:
+            full = os.path.join(path, name)
+            if os.path.exists(full):
+                return full
 
     raise RuntimeError(
-        f"Could not find openGJK_GPU shared library. Searched:\n" +
-        "\n".join(f"  {p}/{n}" for p in search_paths for n in lib_names) +
-        f"\n\nMake sure to build the library with SHARED option enabled."
+        "Could not find openGJK_GPU shared library. Searched:\n" +
+        "\n".join(f"  {p}/{n}" for p in search_paths for n in lib_names)
     )
 
 
-# Load library
-_lib_path = _find_library()
-_lib = ctypes.CDLL(_lib_path)
+_lib = ctypes.CDLL(_find_library())
 
 
 # ============================================================================
 # Function Signatures
 # ============================================================================
 
-# High-level API
-_lib.compute_minimum_distance.argtypes = [
-    ctypes.c_int,                   # n
-    ctypes.POINTER(gkPolytope),     # bd1
-    ctypes.POINTER(gkPolytope),     # bd2
-    ctypes.POINTER(gkSimplex),      # simplices
-    ctypes.POINTER(gkFloat)         # distances
-]
-_lib.compute_minimum_distance.restype = None
-
-_lib.compute_epa.argtypes = [
-    ctypes.c_int,                   # n
-    ctypes.POINTER(gkPolytope),     # bd1
-    ctypes.POINTER(gkPolytope),     # bd2
-    ctypes.POINTER(gkSimplex),      # simplices
-    ctypes.POINTER(gkFloat),        # distances
-    ctypes.POINTER(gkFloat),        # witness1
-    ctypes.POINTER(gkFloat),        # witness2
-    ctypes.POINTER(gkFloat)         # contact_normals (nullable)
-]
-_lib.compute_epa.restype = None
-
-_lib.compute_gjk_epa.argtypes = [
-    ctypes.c_int,                   # n
-    ctypes.POINTER(gkPolytope),     # bd1
-    ctypes.POINTER(gkPolytope),     # bd2
-    ctypes.POINTER(gkSimplex),      # simplices
-    ctypes.POINTER(gkFloat),        # distances
-    ctypes.POINTER(gkFloat),        # witness1
-    ctypes.POINTER(gkFloat)         # witness2
-]
-_lib.compute_gjk_epa.restype = None
+# --- High-level (used only for indexed, which has no mid-level equivalent) ---
 
 _lib.compute_minimum_distance_indexed.argtypes = [
-    ctypes.c_int,                   # num_polytopes
-    ctypes.c_int,                   # num_pairs
-    ctypes.POINTER(gkPolytope),     # polytopes
+    ctypes.c_int,                    # num_polytopes
+    ctypes.c_int,                    # num_pairs
+    ctypes.POINTER(gkPolytope),      # polytopes
     ctypes.POINTER(gkCollisionPair), # pairs
-    ctypes.POINTER(gkSimplex),      # simplices
-    ctypes.POINTER(gkFloat)         # distances
+    ctypes.POINTER(gkSimplex),       # simplices
+    ctypes.POINTER(gkFloat),         # distances
 ]
 _lib.compute_minimum_distance_indexed.restype = None
 
+# --- Mid-level: GJK ---
+
+_lib.allocate_and_copy_device_arrays.argtypes = [
+    ctypes.c_int,                    # n
+    ctypes.POINTER(gkPolytope),      # bd1 (host)
+    ctypes.POINTER(gkPolytope),      # bd2 (host)
+    ctypes.POINTER(ctypes.c_void_p), # d_bd1 (out)
+    ctypes.POINTER(ctypes.c_void_p), # d_bd2 (out)
+    ctypes.POINTER(ctypes.c_void_p), # d_coord1 (out)
+    ctypes.POINTER(ctypes.c_void_p), # d_coord2 (out)
+    ctypes.POINTER(ctypes.c_void_p), # d_simplices (out)
+    ctypes.POINTER(ctypes.c_void_p), # d_distances (out)
+]
+_lib.allocate_and_copy_device_arrays.restype = None
+
+_lib.compute_minimum_distance_device.argtypes = [
+    ctypes.c_int,    # n
+    ctypes.c_void_p, # d_bd1
+    ctypes.c_void_p, # d_bd2
+    ctypes.c_void_p, # d_simplices
+    ctypes.c_void_p, # d_distances
+]
+_lib.compute_minimum_distance_device.restype = None
+
+_lib.copy_results_from_device.argtypes = [
+    ctypes.c_int,               # n
+    ctypes.c_void_p,            # d_simplices
+    ctypes.c_void_p,            # d_distances
+    ctypes.POINTER(gkSimplex),  # simplices (host out)
+    ctypes.POINTER(gkFloat),    # distances (host out)
+]
+_lib.copy_results_from_device.restype = None
+
+_lib.free_device_arrays.argtypes = [
+    ctypes.c_void_p, # d_bd1
+    ctypes.c_void_p, # d_bd2
+    ctypes.c_void_p, # d_coord1
+    ctypes.c_void_p, # d_coord2
+    ctypes.c_void_p, # d_simplices
+    ctypes.c_void_p, # d_distances
+]
+_lib.free_device_arrays.restype = None
+
+# --- Mid-level: EPA ---
+
+_lib.allocate_epa_device_arrays.argtypes = [
+    ctypes.c_int,                    # n
+    ctypes.POINTER(ctypes.c_void_p), # d_witness1 (out)
+    ctypes.POINTER(ctypes.c_void_p), # d_witness2 (out)
+    ctypes.POINTER(ctypes.c_void_p), # d_contact_normals (out, nullable)
+]
+_lib.allocate_epa_device_arrays.restype = None
+
+_lib.compute_epa_device.argtypes = [
+    ctypes.c_int,    # n
+    ctypes.c_void_p, # d_bd1
+    ctypes.c_void_p, # d_bd2
+    ctypes.c_void_p, # d_simplices
+    ctypes.c_void_p, # d_distances
+    ctypes.c_void_p, # d_witness1
+    ctypes.c_void_p, # d_witness2
+    ctypes.c_void_p, # d_contact_normals (nullable)
+]
+_lib.compute_epa_device.restype = None
+
+_lib.copy_epa_results_from_device.argtypes = [
+    ctypes.c_int,            # n
+    ctypes.c_void_p,         # d_witness1
+    ctypes.c_void_p,         # d_witness2
+    ctypes.c_void_p,         # d_contact_normals (nullable)
+    ctypes.POINTER(gkFloat), # witness1 (host out)
+    ctypes.POINTER(gkFloat), # witness2 (host out)
+    ctypes.POINTER(gkFloat), # contact_normals (host out, nullable)
+]
+_lib.copy_epa_results_from_device.restype = None
+
+_lib.free_epa_device_arrays.argtypes = [
+    ctypes.c_void_p, # d_witness1
+    ctypes.c_void_p, # d_witness2
+    ctypes.c_void_p, # d_contact_normals (nullable)
+]
+_lib.free_epa_device_arrays.restype = None
+
 
 # ============================================================================
-# Helper Functions
+# Python Objects
 # ============================================================================
 
-def _prepare_polytope_array(vertices: np.ndarray) -> Tuple[gkPolytope, np.ndarray]:
+class PolytopeArray:
     """
-    Convert numpy array to GPU polytope structure.
+    Batch of polytopes backed by a single contiguous coord buffer.
+
+    Accepts a list of (n_i, 3) arrays — vertex counts may vary per polytope.
+    Also accepts a 3D ndarray of shape (N, num_verts, 3) for uniform batches.
+    """
+
+    def __init__(self, vertices_list: List[np.ndarray]):
+        n = len(vertices_list)
+        self.n = n
+
+        counts = [v.shape[0] for v in vertices_list]
+        total = sum(counts) * 3
+        self._all_coords = np.empty(total, dtype=DTYPE)
+        self._array = (gkPolytope * n)()
+
+        offset = 0
+        for i, verts in enumerate(vertices_list):
+            verts = np.asarray(verts, dtype=DTYPE)
+            if verts.ndim != 2 or verts.shape[1] != 3:
+                raise ValueError(f"Polytope {i}: expected shape (n, 3), got {verts.shape}")
+            count = verts.shape[0] * 3
+            self._all_coords[offset:offset + count] = verts.ravel()
+            self._array[i].numpoints = verts.shape[0]
+            self._array[i].s = (gkFloat * 3)(0, 0, 0)
+            self._array[i].s_idx = 0
+            self._array[i].coord = self._all_coords[offset:].ctypes.data_as(
+                ctypes.POINTER(gkFloat)
+            )
+            offset += count
+
+    def as_ptr(self):
+        return ctypes.cast(self._array, ctypes.POINTER(gkPolytope))
+
+
+class SimplexArray:
+    """Batch of GJK simplex results."""
+
+    def __init__(self, n: int):
+        self.n = n
+        self._array = (gkSimplex * n)()
+
+    def as_ptr(self):
+        return ctypes.cast(self._array, ctypes.POINTER(gkSimplex))
+
+    def extract(self):
+        """Return (witnesses1, witnesses2, nvrtx) as numpy arrays."""
+        witnesses1 = np.empty((self.n, 3), dtype=DTYPE)
+        witnesses2 = np.empty((self.n, 3), dtype=DTYPE)
+        nvrtx = np.empty(self.n, dtype=np.int32)
+        for i in range(self.n):
+            s = self._array[i]
+            witnesses1[i] = s.witnesses[0]
+            witnesses2[i] = s.witnesses[1]
+            nvrtx[i] = s.nvrtx
+        return witnesses1, witnesses2, nvrtx
+
+
+class GpuBatch:
+    """
+    Owns GPU memory for a fixed set of polytope pairs.
+
+    Upload happens once at construction. GJK and EPA can be called
+    repeatedly without re-allocating or re-copying polytope data.
 
     Args:
-        vertices: NumPy array of shape (n, 3)
-
-    Returns:
-        (gkPolytope, coord_array) where coord_array must be kept alive
+        bd1:      First polytope array.
+        bd2:      Second polytope array.
+        with_epa: Pre-allocate GPU witness/normals buffers for EPA (default False).
     """
-    if vertices.ndim != 2 or vertices.shape[1] != 3:
-        raise ValueError(f"Vertices must have shape (n, 3), got {vertices.shape}")
 
-    # Ensure correct dtype and contiguous memory
-    coords_flat = np.ascontiguousarray(vertices.flatten(), dtype=DTYPE)
+    def __init__(
+        self,
+        bd1: PolytopeArray,
+        bd2: PolytopeArray,
+        with_epa: bool = False,
+    ):
+        if bd1.n != bd2.n:
+            raise ValueError(f"bd1 has {bd1.n} polytopes but bd2 has {bd2.n}")
+        self.n = bd1.n
+        self._bd1 = bd1
+        self._bd2 = bd2
+        self._with_epa = with_epa
 
-    polytope = gkPolytope()
-    polytope.numpoints = vertices.shape[0]
-    polytope.s = (gkFloat * 3)(0, 0, 0)
-    polytope.s_idx = 0
-    polytope.coord = coords_flat.ctypes.data_as(ctypes.POINTER(gkFloat))
+        # Host output buffers (pre-allocated, reused across calls)
+        self._simplices  = SimplexArray(self.n)
+        self._distances  = np.zeros(self.n, dtype=DTYPE)
 
-    return polytope, coords_flat
+        # GJK device pointers
+        self._d_bd1       = ctypes.c_void_p()
+        self._d_bd2       = ctypes.c_void_p()
+        self._d_coord1    = ctypes.c_void_p()
+        self._d_coord2    = ctypes.c_void_p()
+        self._d_simplices = ctypes.c_void_p()
+        self._d_distances = ctypes.c_void_p()
 
+        _lib.allocate_and_copy_device_arrays(
+            self.n,
+            bd1.as_ptr(), bd2.as_ptr(),
+            ctypes.byref(self._d_bd1),
+            ctypes.byref(self._d_bd2),
+            ctypes.byref(self._d_coord1),
+            ctypes.byref(self._d_coord2),
+            ctypes.byref(self._d_simplices),
+            ctypes.byref(self._d_distances),
+        )
 
-def _prepare_polytope_batch(vertices_batch: Union[List[np.ndarray], np.ndarray]) -> Tuple[ctypes.Array, List[np.ndarray]]:
-    """
-    Prepare a batch of polytopes for GPU processing.
+        # EPA device pointers and host buffers (only GPU memory allocated when requested)
+        self._d_witness1        = ctypes.c_void_p()
+        self._d_witness2        = ctypes.c_void_p()
+        self._d_contact_normals = ctypes.c_void_p()
+        self._witnesses1        = np.empty((self.n, 3), dtype=DTYPE)
+        self._witnesses2        = np.empty((self.n, 3), dtype=DTYPE)
+        self._contact_normals   = np.empty((self.n, 3), dtype=DTYPE)
 
-    Args:
-        vertices_batch: 3D ndarray of shape (num_poly, num_verts, 3), or
-                        list of 2D arrays each shape (num_verts, 3)
+        if self._with_epa:
+            # Always allocate d_contact_normals — the EPA kernel writes to it
+            # unconditionally in its non-collision branch, so passing null
+            # causes a GPU memory error that corrupts all subsequent results.
+            _lib.allocate_epa_device_arrays(
+                self.n,
+                ctypes.byref(self._d_witness1),
+                ctypes.byref(self._d_witness2),
+                ctypes.byref(self._d_contact_normals),
+            )
 
-    Returns:
-        (ctypes array of polytopes, list of coord arrays to keep alive)
-    """
-    # Convert list to ndarray if needed (for performance)
-    if isinstance(vertices_batch, list):
-        vertices_batch = np.array(vertices_batch, dtype=DTYPE)
+    def compute_gjk(self) -> dict:
+        _lib.compute_minimum_distance_device(
+            self.n,
+            self._d_bd1, self._d_bd2,
+            self._d_simplices, self._d_distances,
+        )
+        _lib.copy_results_from_device(
+            self.n,
+            self._d_simplices, self._d_distances,
+            self._simplices.as_ptr(),
+            self._distances.ctypes.data_as(ctypes.POINTER(gkFloat)),
+        )
+        witnesses1, witnesses2, nvrtx = self._simplices.extract()
+        return {
+            'distances':     self._distances.copy(),
+            'witnesses1':    witnesses1,
+            'witnesses2':    witnesses2,
+            'is_collision':  np.abs(self._distances) < 1e-6,
+            'simplex_nvrtx': nvrtx,
+        }
 
-    # Now vertices_batch is a 3D ndarray
-    n = vertices_batch.shape[0]
-    bd_array = (gkPolytope * n)()
-    coords_keep_alive = []
+    def compute_epa(self) -> dict:
+        if not self._with_epa:
+            raise RuntimeError("GpuBatch was created without with_epa=True")
 
-    for i in range(n):
-        polytope, coords = _prepare_polytope_array(vertices_batch[i])
-        bd_array[i] = polytope
-        coords_keep_alive.append(coords)
+        # GJK must run first — EPA expands the GJK simplex
+        _lib.compute_minimum_distance_device(
+            self.n,
+            self._d_bd1, self._d_bd2,
+            self._d_simplices, self._d_distances,
+        )
+        _lib.compute_epa_device(
+            self.n,
+            self._d_bd1, self._d_bd2,
+            self._d_simplices, self._d_distances,
+            self._d_witness1, self._d_witness2,
+            self._d_contact_normals,  # null c_void_p if not with_normals
+        )
+        _lib.copy_epa_results_from_device(
+            self.n,
+            self._d_witness1, self._d_witness2, self._d_contact_normals,
+            self._witnesses1.ctypes.data_as(ctypes.POINTER(gkFloat)),
+            self._witnesses2.ctypes.data_as(ctypes.POINTER(gkFloat)),
+            self._contact_normals.ctypes.data_as(ctypes.POINTER(gkFloat)),
+        )
+        # Copy distances back too (EPA overwrites them with penetration depths)
+        _lib.copy_results_from_device(
+            self.n,
+            self._d_simplices, self._d_distances,
+            self._simplices.as_ptr(),
+            self._distances.ctypes.data_as(ctypes.POINTER(gkFloat)),
+        )
+        return {
+            'penetration_depths': self._distances.copy(),
+            'witnesses1':         self._witnesses1.copy(),
+            'witnesses2':         self._witnesses2.copy(),
+            'contact_normals':    self._contact_normals.copy(),
+        }
 
-    return bd_array, coords_keep_alive
+    def compute_gjk_epa(self) -> dict:
+        if not self._with_epa:
+            raise RuntimeError("GpuBatch was created without with_epa=True")
+
+        gjk = self.compute_gjk()
+
+        _lib.compute_epa_device(
+            self.n,
+            self._d_bd1, self._d_bd2,
+            self._d_simplices, self._d_distances,
+            self._d_witness1, self._d_witness2,
+            self._d_contact_normals,
+        )
+        _lib.copy_epa_results_from_device(
+            self.n,
+            self._d_witness1, self._d_witness2, self._d_contact_normals,
+            self._witnesses1.ctypes.data_as(ctypes.POINTER(gkFloat)),
+            self._witnesses2.ctypes.data_as(ctypes.POINTER(gkFloat)),
+            self._contact_normals.ctypes.data_as(ctypes.POINTER(gkFloat)),
+        )
+        _lib.copy_results_from_device(
+            self.n,
+            self._d_simplices, self._d_distances,
+            self._simplices.as_ptr(),
+            self._distances.ctypes.data_as(ctypes.POINTER(gkFloat)),
+        )
+
+        # Colliding pairs: use EPA witnesses + penetration depth
+        # Separated pairs: use GJK witnesses + distance
+        is_col = gjk['is_collision']
+        witnesses1 = np.where(is_col[:, None], self._witnesses1, gjk['witnesses1'])
+        witnesses2 = np.where(is_col[:, None], self._witnesses2, gjk['witnesses2'])
+
+        return {
+            'distances':        self._distances.copy(),
+            'is_collision':     is_col,
+            'witnesses1':       witnesses1,
+            'witnesses2':       witnesses2,
+            'contact_normals':  self._contact_normals.copy(),
+            'simplex_nvrtx':    gjk['simplex_nvrtx'],
+        }
+
+    def __del__(self):
+        if hasattr(self, '_d_bd1') and self._d_bd1.value:
+            _lib.free_device_arrays(
+                self._d_bd1, self._d_bd2,
+                self._d_coord1, self._d_coord2,
+                self._d_simplices, self._d_distances,
+            )
+        if hasattr(self, '_with_epa') and self._with_epa and self._d_witness1.value:
+            _lib.free_epa_device_arrays(
+                self._d_witness1,
+                self._d_witness2,
+                self._d_contact_normals,
+            )
 
 
 # ============================================================================
-# High-Level Python API (NumPy-based)
+# Input Normalization
+# ============================================================================
+
+def _to_polytope_array(v) -> PolytopeArray:
+    if isinstance(v, PolytopeArray):
+        return v
+    if isinstance(v, np.ndarray):
+        if v.ndim == 3:
+            return PolytopeArray([v[i] for i in range(v.shape[0])])
+        if v.ndim == 2:
+            return PolytopeArray([v])
+    if isinstance(v, list):
+        return PolytopeArray(v)
+    raise ValueError(f"Expected PolytopeArray, ndarray, or list — got {type(v)}")
+
+
+# ============================================================================
+# Indexed Batch
+# ============================================================================
+
+class IndexedBatch:
+    """
+    Holds a pool of polytopes for repeated indexed GJK queries.
+
+    Packs vertex data into a contiguous host buffer once at construction.
+    Call compute(pairs) with different pair index arrays — of any size — to
+    run GJK without re-packing vertex data each time.
+
+    Args:
+        polytopes: PolytopeArray, (M, D, 3) ndarray, or list of (V_i, 3) arrays
+    """
+
+    def __init__(self, polytopes: Union['PolytopeArray', np.ndarray, list]):
+        self._bd = _to_polytope_array(polytopes)
+
+    def compute(self, pairs: np.ndarray) -> dict:
+        """
+        Run GJK for the given index pairs.
+
+        Args:
+            pairs: (n_pairs, 2) int32 array of indices into the polytope pool
+
+        Returns:
+            Same keys as GpuBatch.compute_gjk().
+        """
+        pairs = np.asarray(pairs, dtype=np.int32)
+        if pairs.ndim != 2 or pairs.shape[1] != 2:
+            raise ValueError(f"pairs must have shape (n_pairs, 2), got {pairs.shape}")
+        num_pairs = pairs.shape[0]
+
+        pairs_array = (gkCollisionPair * num_pairs)()
+        for i in range(num_pairs):
+            pairs_array[i].idx1 = int(pairs[i, 0])
+            pairs_array[i].idx2 = int(pairs[i, 1])
+
+        simplices = SimplexArray(num_pairs)
+        distances = np.zeros(num_pairs, dtype=DTYPE)
+
+        _lib.compute_minimum_distance_indexed(
+            self._bd.n,
+            num_pairs,
+            self._bd.as_ptr(),
+            ctypes.cast(pairs_array, ctypes.POINTER(gkCollisionPair)),
+            simplices.as_ptr(),
+            distances.ctypes.data_as(ctypes.POINTER(gkFloat)),
+        )
+
+        witnesses1, witnesses2, nvrtx = simplices.extract()
+        return {
+            'distances':     distances,
+            'witnesses1':    witnesses1,
+            'witnesses2':    witnesses2,
+            'is_collision':  np.abs(distances) < 1e-6,
+            'simplex_nvrtx': nvrtx,
+        }
+
+
+# ============================================================================
+# Public API
 # ============================================================================
 
 def compute_minimum_distance(
-    vertices1: Union[np.ndarray, List[np.ndarray]],
-    vertices2: Union[np.ndarray, List[np.ndarray]]
-) -> Dict[str, np.ndarray]:
+    vertices1: Union['PolytopeArray', np.ndarray, list],
+    vertices2: Union['PolytopeArray', np.ndarray, list],
+) -> dict:
     """
-    Compute minimum distance between polytope pairs using GPU-accelerated GJK.
+    Compute minimum distance between polytope pairs using GPU GJK.
 
     Args:
-        vertices1: NumPy array of shape (num_verts, 3) for single pair,
-                   (num_poly, num_verts, 3) for batch, or list of arrays for batch
-        vertices2: NumPy array of shape (num_verts, 3) for single pair,
-                   (num_poly, num_verts, 3) for batch, or list of arrays for batch
+        vertices1: PolytopeArray, (N, V, 3) ndarray, (V, 3) ndarray, or list of (V_i, 3) arrays
+        vertices2: same
 
     Returns:
-        Dictionary with NumPy arrays:
-            'distances': (num_pairs,) distances between polytopes (0.0 = collision)
-            'witnesses1': (num_pairs, 3) closest points on first polytopes
-            'witnesses2': (num_pairs, 3) closest points on second polytopes
-            'is_collision': (num_pairs,) boolean array indicating collisions
-            'simplex_nvrtx': (num_pairs,) number of vertices in each simplex
-
-    Example:
-        Single pair:
-        >>> v1 = np.array([[0, 5.5, 0], [2.3, 1.0, -2.0], [8.1, 4.0, 2.4]], dtype=np.float32)
-        >>> v2 = np.array([[0, -5.5, 0], [-2.3, -1.0, 2.0], [-8.1, -4.0, -2.4]], dtype=np.float32)
-        >>> result = compute_minimum_distance(v1, v2)
-        >>> print(f"Distance: {result['distances'][0]}")
-
-        Batch (list):
-        >>> v1_list = [np.random.randn(10, 3) for _ in range(100)]
-        >>> v2_list = [np.random.randn(10, 3) for _ in range(100)]
-        >>> result = compute_minimum_distance(v1_list, v2_list)
-        >>> print(f"Collisions: {result['is_collision'].sum()}")
-
-        Batch (ndarray):
-        >>> v1_batch = np.random.randn(100, 10, 3).astype(np.float32)
-        >>> v2_batch = np.random.randn(100, 10, 3).astype(np.float32)
-        >>> result = compute_minimum_distance(v1_batch, v2_batch)
-        >>> print(f"Collisions: {result['is_collision'].sum()}")
+        'distances':     (N,) distances (0.0 = collision)
+        'witnesses1':    (N, 3) closest points on first polytopes
+        'witnesses2':    (N, 3) closest points on second polytopes
+        'is_collision':  (N,) bool
+        'simplex_nvrtx': (N,) simplex vertex counts
     """
-    # Normalize inputs to 3D ndarrays (convert list to ndarray if needed)
-    if isinstance(vertices1, list):
-        vertices1 = np.array(vertices1, dtype=DTYPE)
-    if isinstance(vertices2, list):
-        vertices2 = np.array(vertices2, dtype=DTYPE)
-
-    # Both should now be 3D ndarrays of shape (num_poly, num_verts, 3)
-    if vertices1.ndim != 3 or vertices1.shape[2] != 3:
-        raise ValueError(f"Expected 3D array (num_poly, num_verts, 3), got shape {vertices1.shape}")
-    if vertices2.ndim != 3 or vertices2.shape[2] != 3:
-        raise ValueError(f"Expected 3D array (num_poly, num_verts, 3), got shape {vertices2.shape}")
-
-    n = vertices1.shape[0]
-    if vertices2.shape[0] != n:
-        raise ValueError(f"Mismatch: {vertices1.shape[0]} polytopes in bd1, {vertices2.shape[0]} in bd2")
-
-    # Prepare polytopes (coords_alive arrays must stay in scope to prevent garbage collection)
-    bd1_array, coords1_alive = _prepare_polytope_batch(vertices1)
-    bd2_array, coords2_alive = _prepare_polytope_batch(vertices2)
-
-    # Allocate outputs
-    simplices = (gkSimplex * n)()
-    distances = np.zeros(n, dtype=DTYPE)
-
-    # Call GPU function
-    _lib.compute_minimum_distance(
-        n, bd1_array, bd2_array, simplices,
-        distances.ctypes.data_as(ctypes.POINTER(gkFloat))
-    )
-
-    # Extract results as NumPy arrays (vectorized)
-    witnesses1 = np.zeros((n, 3), dtype=DTYPE)
-    witnesses2 = np.zeros((n, 3), dtype=DTYPE)
-    simplex_nvrtx = np.zeros(n, dtype=np.int32)
-
-    for i in range(n):
-        witnesses1[i] = simplices[i].witnesses[0]
-        witnesses2[i] = simplices[i].witnesses[1]
-        simplex_nvrtx[i] = simplices[i].nvrtx
-
-    # Vectorized collision detection
-    is_collision = np.abs(distances) < 1e-6
-
-    return {
-        'distances': distances,
-        'witnesses1': witnesses1,
-        'witnesses2': witnesses2,
-        'is_collision': is_collision,
-        'simplex_nvrtx': simplex_nvrtx
-    }
-
-
-def compute_epa(
-    vertices1: Union[np.ndarray, List[np.ndarray]],
-    vertices2: Union[np.ndarray, List[np.ndarray]],
-    return_normals: bool = False
-) -> Dict[str, np.ndarray]:
-    """
-    Compute penetration depth and witness points using GPU-accelerated EPA.
-
-    EPA (Expanding Polytope Algorithm) is used when polytopes are colliding
-    to find penetration depth and contact points.
-
-    Args:
-        vertices1: 3D ndarray (num_poly, num_verts, 3) or list of 2D arrays
-        vertices2: 3D ndarray (num_poly, num_verts, 3) or list of 2D arrays
-        return_normals: If True, compute and return contact normals
-
-    Returns:
-        Dictionary with NumPy arrays:
-            'penetration_depths': (num_pairs,) penetration distances
-            'witnesses1': (num_pairs, 3) contact points on first polytopes
-            'witnesses2': (num_pairs, 3) contact points on second polytopes
-            'contact_normals': (num_pairs, 3) contact normals (if return_normals=True)
-    """
-    # Normalize inputs to 3D ndarrays
-    if isinstance(vertices1, list):
-        vertices1 = np.array(vertices1, dtype=DTYPE)
-    if isinstance(vertices2, list):
-        vertices2 = np.array(vertices2, dtype=DTYPE)
-
-    if vertices1.ndim != 3 or vertices1.shape[2] != 3:
-        raise ValueError(f"Expected 3D array (num_poly, num_verts, 3), got shape {vertices1.shape}")
-    if vertices2.ndim != 3 or vertices2.shape[2] != 3:
-        raise ValueError(f"Expected 3D array (num_poly, num_verts, 3), got shape {vertices2.shape}")
-
-    n = vertices1.shape[0]
-    if vertices2.shape[0] != n:
-        raise ValueError(f"Mismatch: {vertices1.shape[0]} polytopes in bd1, {vertices2.shape[0]} in bd2")
-
-    # Prepare polytopes (coords_alive arrays must stay in scope to prevent garbage collection)
-    bd1_array, coords1_alive = _prepare_polytope_batch(vertices1)
-    bd2_array, coords2_alive = _prepare_polytope_batch(vertices2)
-
-    # Allocate outputs
-    simplices = (gkSimplex * n)()
-    distances = np.zeros(n, dtype=DTYPE)
-    witnesses1 = np.zeros(n * 3, dtype=DTYPE)
-    witnesses2 = np.zeros(n * 3, dtype=DTYPE)
-    contact_normals = np.zeros(n * 3, dtype=DTYPE) if return_normals else np.empty(0, dtype=DTYPE)
-
-    # Call GPU function
-    _lib.compute_epa(
-        n, bd1_array, bd2_array, simplices,
-        distances.ctypes.data_as(ctypes.POINTER(gkFloat)),
-        witnesses1.ctypes.data_as(ctypes.POINTER(gkFloat)),
-        witnesses2.ctypes.data_as(ctypes.POINTER(gkFloat)),
-        contact_normals.ctypes.data_as(ctypes.POINTER(gkFloat)) if return_normals else None
-    )
-
-    # Reshape witness points and build result
-    if return_normals:
-        return {
-            'penetration_depths': distances,
-            'witnesses1': witnesses1.reshape(n, 3),
-            'witnesses2': witnesses2.reshape(n, 3),
-            'contact_normals': contact_normals.reshape(n, 3)
-        }
-    else:
-        return {
-            'penetration_depths': distances,
-            'witnesses1': witnesses1.reshape(n, 3),
-            'witnesses2': witnesses2.reshape(n, 3)
-        }
-
-
-def compute_gjk_epa(
-    vertices1: Union[np.ndarray, List[np.ndarray]],
-    vertices2: Union[np.ndarray, List[np.ndarray]]
-) -> Dict[str, np.ndarray]:
-    """
-    Combined GJK+EPA pipeline: runs GJK first, then EPA for colliding pairs.
-
-    This is more efficient than calling both separately as it reuses
-    the GJK simplex for EPA initialization.
-
-    Args:
-        vertices1: 3D ndarray (num_poly, num_verts, 3) or list of 2D arrays
-        vertices2: 3D ndarray (num_poly, num_verts, 3) or list of 2D arrays
-
-    Returns:
-        Dictionary with NumPy arrays:
-            'distances': (num_pairs,) distances (0.0 for collisions)
-            'is_collision': (num_pairs,) boolean collision flags
-            'witnesses1': (num_pairs, 3) witness/contact points on first polytopes
-            'witnesses2': (num_pairs, 3) witness/contact points on second polytopes
-            'simplex_nvrtx': (num_pairs,) number of simplex vertices
-
-        For colliding pairs, witnesses are EPA contact points.
-        For separated pairs, witnesses are GJK closest points.
-    """
-    # Normalize inputs to 3D ndarrays
-    if isinstance(vertices1, list):
-        vertices1 = np.array(vertices1, dtype=DTYPE)
-    if isinstance(vertices2, list):
-        vertices2 = np.array(vertices2, dtype=DTYPE)
-
-    if vertices1.ndim != 3 or vertices1.shape[2] != 3:
-        raise ValueError(f"Expected 3D array (num_poly, num_verts, 3), got shape {vertices1.shape}")
-    if vertices2.ndim != 3 or vertices2.shape[2] != 3:
-        raise ValueError(f"Expected 3D array (num_poly, num_verts, 3), got shape {vertices2.shape}")
-
-    n = vertices1.shape[0]
-    if vertices2.shape[0] != n:
-        raise ValueError(f"Mismatch: {vertices1.shape[0]} polytopes in bd1, {vertices2.shape[0]} in bd2")
-
-    # Prepare polytopes (coords_alive arrays must stay in scope to prevent garbage collection)
-    bd1_array, coords1_alive = _prepare_polytope_batch(vertices1)
-    bd2_array, coords2_alive = _prepare_polytope_batch(vertices2)
-
-    # Allocate outputs
-    simplices = (gkSimplex * n)()
-    distances = np.zeros(n, dtype=DTYPE)
-    witnesses1 = np.zeros(n * 3, dtype=DTYPE)
-    witnesses2 = np.zeros(n * 3, dtype=DTYPE)
-
-    # Call GPU function
-    _lib.compute_gjk_epa(
-        n, bd1_array, bd2_array, simplices,
-        distances.ctypes.data_as(ctypes.POINTER(gkFloat)),
-        witnesses1.ctypes.data_as(ctypes.POINTER(gkFloat)),
-        witnesses2.ctypes.data_as(ctypes.POINTER(gkFloat))
-    )
-
-    # Extract simplex info
-    simplex_nvrtx = np.array([simplices[i].nvrtx for i in range(n)], dtype=np.int32)
-
-    # Vectorized collision detection
-    is_collision = np.abs(distances) < 1e-6
-
-    return {
-        'distances': distances,
-        'is_collision': is_collision,
-        'witnesses1': witnesses1.reshape(n, 3),
-        'witnesses2': witnesses2.reshape(n, 3),
-        'simplex_nvrtx': simplex_nvrtx
-    }
+    bd1 = _to_polytope_array(vertices1)
+    bd2 = _to_polytope_array(vertices2)
+    return GpuBatch(bd1, bd2).compute_gjk()
 
 
 def compute_minimum_distance_indexed(
-    polytopes: List[np.ndarray],
-    pairs: np.ndarray
-) -> Dict[str, np.ndarray]:
+    polytopes: Union['PolytopeArray', np.ndarray, list],
+    pairs: np.ndarray,
+) -> dict:
     """
-    Compute distances for indexed polytope pairs (efficient for reuse).
-
-    When polytopes are reused across multiple collision checks, this API
-    is more efficient as it avoids redundant memory transfers.
+    Compute distances for indexed polytope pairs.
 
     Args:
-        polytopes: List of NumPy arrays, each shape (n, 3)
-        pairs: NumPy array of shape (m, 2) with integer indices
+        polytopes: PolytopeArray, (M, V, 3) ndarray, or list of (V_i, 3) arrays
+        pairs:     (num_pairs, 2) int32 array of polytope index pairs
 
     Returns:
-        Dictionary with NumPy arrays (same as compute_minimum_distance)
-
-    Example:
-        >>> polytopes = [cube1, cube2, sphere, capsule]
-        >>> pairs = np.array([[0, 2], [0, 3], [1, 2], [1, 3]], dtype=np.int32)
-        >>> result = compute_minimum_distance_indexed(polytopes, pairs)
-        >>> print(f"Collision mask: {result['is_collision']}")
+        Same keys as compute_minimum_distance.
     """
-    # Normalize polytopes to 3D ndarray
-    if isinstance(polytopes, list):
-        polytopes = np.array(polytopes, dtype=DTYPE)
+    bd = _to_polytope_array(polytopes)
 
-    if polytopes.ndim != 3 or polytopes.shape[2] != 3:
-        raise ValueError(f"Expected 3D array (num_poly, num_verts, 3), got shape {polytopes.shape}")
-
-    num_polytopes = polytopes.shape[0]
-
-    # Normalize and validate pairs (ensure int32)
-    if not isinstance(pairs, np.ndarray):
-        pairs = np.array(pairs, dtype=np.int32)
-    elif pairs.dtype != np.int32:
-        pairs = pairs.astype(np.int32)
-
+    pairs = np.asarray(pairs, dtype=np.int32)
     if pairs.ndim != 2 or pairs.shape[1] != 2:
-        raise ValueError(f"Pairs must have shape (num_pairs, 2), got {pairs.shape}")
-
+        raise ValueError(f"pairs must have shape (num_pairs, 2), got {pairs.shape}")
     num_pairs = pairs.shape[0]
 
-    # Prepare polytopes
-    bd_array, coords_alive = _prepare_polytope_batch(polytopes)
-
-    # Prepare pairs
     pairs_array = (gkCollisionPair * num_pairs)()
     for i in range(num_pairs):
         pairs_array[i].idx1 = int(pairs[i, 0])
         pairs_array[i].idx2 = int(pairs[i, 1])
 
-    # Allocate outputs
-    simplices = (gkSimplex * num_pairs)()
+    simplices = SimplexArray(num_pairs)
     distances = np.zeros(num_pairs, dtype=DTYPE)
 
-    # Call GPU function
     _lib.compute_minimum_distance_indexed(
-        num_polytopes, num_pairs, bd_array, pairs_array, simplices,
-        distances.ctypes.data_as(ctypes.POINTER(gkFloat))
+        bd.n,
+        num_pairs,
+        bd.as_ptr(),
+        ctypes.cast(pairs_array, ctypes.POINTER(gkCollisionPair)),
+        simplices.as_ptr(),
+        distances.ctypes.data_as(ctypes.POINTER(gkFloat)),
     )
 
-    # Extract results (vectorized)
-    witnesses1 = np.zeros((num_pairs, 3), dtype=DTYPE)
-    witnesses2 = np.zeros((num_pairs, 3), dtype=DTYPE)
-    simplex_nvrtx = np.zeros(num_pairs, dtype=np.int32)
-
-    for i in range(num_pairs):
-        witnesses1[i] = simplices[i].witnesses[0]
-        witnesses2[i] = simplices[i].witnesses[1]
-        simplex_nvrtx[i] = simplices[i].nvrtx
-
-    # Vectorized collision detection
-    is_collision = np.abs(distances) < 1e-6
-
+    witnesses1, witnesses2, nvrtx = simplices.extract()
     return {
-        'distances': distances,
-        'witnesses1': witnesses1,
-        'witnesses2': witnesses2,
-        'is_collision': is_collision,
-        'simplex_nvrtx': simplex_nvrtx
+        'distances':     distances,
+        'witnesses1':    witnesses1,
+        'witnesses2':    witnesses2,
+        'is_collision':  np.abs(distances) < 1e-6,
+        'simplex_nvrtx': nvrtx,
     }
+
+
+def compute_epa(
+    vertices1: Union['PolytopeArray', np.ndarray, list],
+    vertices2: Union['PolytopeArray', np.ndarray, list],
+) -> dict:
+    """
+    Compute penetration depth and witness points using GPU EPA.
+
+    Args:
+        vertices1: PolytopeArray, (N, V, 3) ndarray, or list of (V_i, 3) arrays
+        vertices2: same
+
+    Returns:
+        'penetration_depths': (N,) penetration distances
+        'witnesses1':         (N, 3) contact points on first polytopes
+        'witnesses2':         (N, 3) contact points on second polytopes
+        'contact_normals':    (N, 3) contact normals
+    """
+    bd1 = _to_polytope_array(vertices1)
+    bd2 = _to_polytope_array(vertices2)
+    return GpuBatch(bd1, bd2, with_epa=True).compute_epa()
+
+
+def compute_gjk_epa(
+    vertices1: Union['PolytopeArray', np.ndarray, list],
+    vertices2: Union['PolytopeArray', np.ndarray, list],
+) -> dict:
+    """
+    Combined GJK + EPA: GJK for separation distance, EPA for penetration depth.
+
+    Returns GJK witnesses for separated pairs and EPA contact points for colliding pairs.
+
+    Args:
+        vertices1: PolytopeArray, (N, V, 3) ndarray, or list of (V_i, 3) arrays
+        vertices2: same
+
+    Returns:
+        'distances':     (N,) distances (negative = penetration depth)
+        'is_collision':  (N,) bool
+        'witnesses1':    (N, 3) witness/contact points on first polytopes
+        'witnesses2':    (N, 3) witness/contact points on second polytopes
+        'simplex_nvrtx': (N,) simplex vertex counts
+    """
+    bd1 = _to_polytope_array(vertices1)
+    bd2 = _to_polytope_array(vertices2)
+    return GpuBatch(bd1, bd2, with_epa=True).compute_gjk_epa()
 
 
 # ============================================================================
 # Module Info
 # ============================================================================
 
-__version__ = "3.0.0"
+__version__ = "3.1.0"
 __all__ = [
+    "PolytopeArray",
+    "SimplexArray",
+    "GpuBatch",
+    "IndexedBatch",
     "compute_minimum_distance",
+    "compute_minimum_distance_indexed",
     "compute_epa",
     "compute_gjk_epa",
-    "compute_minimum_distance_indexed",
 ]

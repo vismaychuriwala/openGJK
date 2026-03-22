@@ -1,41 +1,53 @@
 import ctypes
-from ctypes import Structure, POINTER, c_int, c_double
+from ctypes import Structure, POINTER, c_int, c_float, c_double
 import os
 from typing import NamedTuple, Tuple, List
+
+# Must match USE_32BITS compile flag (default: OFF for scalar)
+USE_32BITS = False
+
+gkFloat = c_float if USE_32BITS else c_double
 
 
 class POLYTOPE(Structure):
     _fields_ = [
         ("numpoints", c_int),
-        ("s", c_double * 3),
+        ("s", gkFloat * 3),
         ("s_idx", c_int),
-        ("coord", POINTER(POINTER(c_double)))
+        ("coord", POINTER(POINTER(gkFloat)))
     ]
 
 
 class SIMPLEX(Structure):
     _fields_ = [
         ("nvrtx", c_int),
-        ("vrtx", (c_double * 3) * 4),
+        ("vrtx", (gkFloat * 3) * 4),
         ("vrtx_idx", (c_int * 2) * 4),
-        ("witnesses", (c_double * 3) * 2)
+        ("witnesses", (gkFloat * 3) * 2)
     ]
 
 
 module_dir = os.path.dirname(__file__)
+_repo_root = os.path.abspath(os.path.join(module_dir, *(['..'] * 5)))
 if os.path.exists(os.path.join(module_dir, "opengjk_ce.dll")):
     path = os.path.join(module_dir, "opengjk_ce.dll")
 elif os.path.exists(os.path.join(module_dir, "libopengjk_ce.so")):
     path = os.path.join(module_dir, "libopengjk_ce.so")
 elif os.path.exists(os.path.join(module_dir, "libopengjk_ce.dylib")):
     path = os.path.join(module_dir, "libopengjk_ce.dylib")
+elif os.path.exists(os.path.join(_repo_root, "build", "scalar", "Release", "opengjk_scalar.dll")):
+    path = os.path.join(_repo_root, "build", "scalar", "Release", "opengjk_scalar.dll")
+elif os.path.exists(os.path.join(_repo_root, "build", "scalar", "libopengjk_scalar.so")):
+    path = os.path.join(_repo_root, "build", "scalar", "libopengjk_scalar.so")
+elif os.path.exists(os.path.join(_repo_root, "build", "scalar", "libopengjk_scalar.dylib")):
+    path = os.path.join(_repo_root, "build", "scalar", "libopengjk_scalar.dylib")
 else:
-    raise RuntimeError("Could not find rego_shared library")
+    raise RuntimeError("Could not find opengjk scalar shared library")
 
 
 opengjk = ctypes.cdll.LoadLibrary(path)
 
-opengjk.compute_minimum_distance.restype = ctypes.c_double
+opengjk.compute_minimum_distance.restype = gkFloat
 opengjk.compute_minimum_distance.argtypes = [POLYTOPE,
                                              POLYTOPE,
                                              POINTER(SIMPLEX)]
@@ -66,17 +78,17 @@ def compute_minimum_distance(vertices0: List[Point3],
     """
     polytope0 = POLYTOPE()
     polytope0.numpoints = len(vertices0)
-    polytope0.s = (c_double * 3)(0, 0, 0)
-    polytope0.coord = (POINTER(c_double) * len(vertices0))()
+    polytope0.s = (gkFloat * 3)(0, 0, 0)
+    polytope0.coord = (POINTER(gkFloat) * len(vertices0))()
     for i, vertex in enumerate(vertices0):
-        polytope0.coord[i] = (c_double * 3)(*vertex)
+        polytope0.coord[i] = (gkFloat * 3)(*vertex)
 
     polytope1 = POLYTOPE()
     polytope1.numpoints = len(vertices1)
-    polytope1.s = (c_double * 3)(0, 0, 0)
-    polytope1.coord = (POINTER(c_double) * len(vertices1))()
+    polytope1.s = (gkFloat * 3)(0, 0, 0)
+    polytope1.coord = (POINTER(gkFloat) * len(vertices1))()
     for i, vertex in enumerate(vertices1):
-        polytope1.coord[i] = (c_double * 3)(*vertex)
+        polytope1.coord[i] = (gkFloat * 3)(*vertex)
 
     simplex = SIMPLEX()
     simplex.nvrtx = 0

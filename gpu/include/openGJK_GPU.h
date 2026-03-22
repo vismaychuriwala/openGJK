@@ -260,6 +260,26 @@ void compute_minimum_distance_device(
 );
 
 /**
+ * @brief Computes minimum distance using indexed polytope pairs with GPU pointers (device memory).
+ *
+ * Low-level API that assumes all data is already on the GPU. Does not perform
+ * any memory allocation or transfers - only launches the kernel.
+ *
+ * @param num_pairs   Number of collision pairs to check
+ * @param d_polytopes Device pointer to polytope array
+ * @param d_pairs     Device pointer to collision pair indices
+ * @param d_simplices Device pointer to simplex array (output)
+ * @param d_distances Device pointer to distance array (output)
+ */
+void compute_minimum_distance_indexed_device(
+    const int num_pairs,
+    const gkPolytope* d_polytopes,
+    const gkCollisionPair* d_pairs,
+    gkSimplex* d_simplices,
+    gkFloat* d_distances
+);
+
+/**
  * @brief Computes EPA using GPU pointers (device memory).
  *
  * @param n               Number of polytope pairs
