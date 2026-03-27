@@ -48,4 +48,7 @@ add_custom_command(
     COMMAND ${CMAKE_COMMAND} -E copy
     ${CMAKE_CURRENT_SOURCE_DIR}/userQ.dat
     $<TARGET_FILE_DIR:example_lib_openGJK_GPU>/userQ.dat
+    COMMAND ${CMAKE_COMMAND} -E copy
+    $<TARGET_FILE:openGJK_GPU>
+    $<TARGET_FILE_DIR:example_lib_openGJK_GPU>/$<TARGET_FILE_NAME:openGJK_GPU>
 )
