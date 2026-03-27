@@ -8,7 +8,7 @@ Build the scalar shared library from the project root:
 
     mkdir build
     cd build
-    cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_SCALAR=ON -DBUILD_SIMD=OFF
+    cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_SCALAR=ON -DBUILD_SIMD=OFF -DUSE_32BITS=OFF
     cmake --build . --config Release
 
 The shared library will be placed at:
@@ -17,8 +17,8 @@ The shared library will be placed at:
 - Linux:   `build/scalar/libopengjk_scalar.so`
 - macOS:   `build/scalar/libopengjk_scalar.dylib`
 
-The Python wrapper searches these locations automatically. Default precision is float32 (`USE_32BITS=ON`), matching the CMake default.
-To use double, build with `-DUSE_32BITS=OFF` and set `USE_32BITS = False` at the top of `opengjk.py`.
+The Python wrapper searches these locations automatically. The Python wrapper defaults to double precision (`USE_32BITS=False`), so pass `-DUSE_32BITS=OFF` at configure time to match (the global CMake default is float32).
+To use float32 instead, omit `-DUSE_32BITS=OFF` and set `USE_32BITS = True` at the top of `opengjk.py`.
 
 Then set up the Python environment:
 

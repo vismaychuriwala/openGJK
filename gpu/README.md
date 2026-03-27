@@ -16,7 +16,7 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_GPU=ON -DBUILD_SCALAR=OFF -DBU
 cmake --build build --config Release
 ```
 
-Default precision is float32 (`USE_32BITS=ON`). For double use `-DUSE_32BITS=OFF`.
+The global CMake default is float32 (`USE_32BITS=ON`). The `-DUSE_32BITS=OFF` above builds with double, which matches the Python wrapper default.
 
 For the latest updates, benchmarks, and additional details see the [OpenGJK-GPU repository](https://github.com/vismaychuriwala/OpenGJK-GPU).
 

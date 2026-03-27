@@ -35,8 +35,8 @@ The library will be at:
 - Linux:   `build/gpu/libopenGJK_GPU.so`
 - macOS:   `build/gpu/libopenGJK_GPU.dylib`
 
-The wrapper searches these locations automatically. Default precision is float32 (`USE_32BITS=ON`), matching the CMake default.
-To use double, build with `-DUSE_32BITS=OFF` and set `USE_32BITS = False` at the top of `opengjk_gpu.py`.
+The wrapper searches these locations automatically. The Python wrapper defaults to double precision (`USE_32BITS=False`), so build with `-DUSE_32BITS=OFF` to match (the global CMake default is float32).
+To use float32 instead, build without `-DUSE_32BITS=OFF` and set `USE_32BITS = True` at the top of `opengjk_gpu.py`.
 
 > **Using the scalar CPU wrapper too?** Both libraries must be built with the same `USE_32BITS` value, and the flag must match in both `opengjk_gpu.py` and `opengjk.py`.
 
