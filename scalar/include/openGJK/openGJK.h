@@ -166,8 +166,8 @@ OPENGJK_EXPORT gkFloat compute_minimum_distance(gkPolytope bd1, gkPolytope bd2, 
  
  * Witness points are automatically computed and stored in s->witnesses. */
 OPENGJK_EXPORT void computeCollisionInformation(
-  const gkPolytope* bd1,
-  const gkPolytope* bd2,
+  gkPolytope bd1,
+  gkPolytope bd2,
   gkSimplex* simplex,
   gkFloat* distance,
   gkFloat contact_normal[3]);

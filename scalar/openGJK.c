@@ -59,7 +59,7 @@
 #define norm2(a) (a[0] * a[0] + a[1] * a[1] + a[2] * a[2])
 #define dotProduct(a, b) (a[0] * b[0] + a[1] * b[1] + a[2] * b[2])
 
-#define getCoord(body, index, component) body->coord[(index)][(component)]
+#define getCoord(body, index, component) body.coord[(index)][(component)]
 
 #define S3Dregion1234() \
   v[0] = 0;             \
@@ -1270,7 +1270,7 @@ inline static void compute_barycentric_origin(
 }
 
 // Support function for EPA basicallly GJK one but only care about minkowski difference point
-inline static void support_epa(const gkPolytope* body1, const gkPolytope* body2,
+inline static void support_epa(gkPolytope body1, gkPolytope body2,
   const gkFloat* direction, gkFloat* result, int* result_idx) {
 
   gkFloat local_max1 = -1e10f;
@@ -1279,7 +1279,7 @@ inline static void support_epa(const gkPolytope* body1, const gkPolytope* body2,
   int local_best2 = -1;
 
   // Search body1
-  for (int i = 0; i < body1->numpoints; i++) {
+  for (int i = 0; i < body1.numpoints; i++) {
     gkFloat s = getCoord(body1, i, 0) * direction[0]
               + getCoord(body1, i, 1) * direction[1]
               + getCoord(body1, i, 2) * direction[2];
@@ -1290,7 +1290,7 @@ inline static void support_epa(const gkPolytope* body1, const gkPolytope* body2,
   }
 
   // Search body2 in opposite direction
-  for (int i = 0; i < body2->numpoints; i++) {
+  for (int i = 0; i < body2.numpoints; i++) {
     gkFloat s = getCoord(body2, i, 0) * direction[0]
               + getCoord(body2, i, 1) * direction[1]
               + getCoord(body2, i, 2) * direction[2];
@@ -1327,8 +1327,8 @@ static void set_contact_normal(const gkFloat* w1, const gkFloat* w2, gkFloat* co
 //*******************************************************************************************
 
   void computeCollisionInformation(
-  const gkPolytope* bd1,
-  const gkPolytope* bd2,
+  gkPolytope bd1,
+  gkPolytope bd2,
   gkSimplex* simplex,
   gkFloat* distance,
   gkFloat contact_normal[3]) {
@@ -1557,7 +1557,7 @@ static void set_contact_normal(const gkFloat* w1, const gkFloat* w2, gkFloat* co
 
   // EPA iteration parameters
   const int max_iterations = 64;
-  const gkFloat tolerance = GJK_EPSILON_ABS_MULT;
+  const gkFloat tolerance = GJK_EPSILON_ABS;
   int iteration = 0;
 
   // Main EPA loop
