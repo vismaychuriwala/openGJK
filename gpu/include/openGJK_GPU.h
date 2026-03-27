@@ -57,11 +57,15 @@ extern "C" {
 #define gkEpsilon FLT_EPSILON
 #define gkSqrt sqrtf
 #define gkFmax fmaxf
+#define gkFmin fminf
+#define gkFabs fabsf
 #else
 #define gkFloat double
 #define gkEpsilon DBL_EPSILON
 #define gkSqrt sqrt
 #define gkFmax fmax
+#define gkFmin fmin
+#define gkFabs fabs
 #endif
 
 /*! @brief Data structure for convex polytopes (GPU version).
@@ -83,14 +87,6 @@ typedef struct gkSimplex_ {
   gkFloat witnesses[2][3]; /*!< Witness points (closest points on each body). */
 } gkSimplex;
 
-/**
- * @brief Index pair specifying which polytopes to check for collision.
- */
-struct gkCollisionPair {
-    int idx1;  /*!< Index of first polytope. */
-    int idx2;  /*!< Index of second polytope. */
-};
-
 // ============================================================================
 // LOW-LEVEL API: Direct kernel access
 // ============================================================================
@@ -99,16 +95,6 @@ struct gkCollisionPair {
  * polytopes using 16 threads per collision. */
 __global__ void compute_minimum_distance_kernel(const gkPolytope* polytopes1, const gkPolytope* polytopes2,
   gkSimplex* simplices, gkFloat* distances, const int n);
-
-/*! @brief Invoke the warp-parallel GJK algorithm using indexed polytope pairs.
- * Uses 16 threads per collision. Thread i uses pairs[i] to look up polytopes. */
-__global__ void compute_minimum_distance_indexed_kernel(
-    const gkPolytope* polytopes,
-    const gkCollisionPair* pairs,
-    gkSimplex* simplices,
-    gkFloat* distances,
-    const int n
-);
 
 /*! @brief Invoke the warp-parallel EPA algorithm to compute penetration depth and witness points
  * for colliding polytopes using 32 threads (one warp) per collision.
@@ -121,13 +107,12 @@ __global__ void compute_minimum_distance_indexed_kernel(
  * @param polytopes2 Second set of polytopes
  * @param simplices Simplex results from GJK (should have 4 vertices for collisions)
  * @param distances Output array for penetration depths (or distances if no collision)
- * @param witness1 Output array for witness points on first polytope (3 floats per collision)
- * @param witness2 Output array for witness points on second polytope (3 floats per collision)
  * @param contact_normals Output array for contact normals (3 floats per collision, points from polytope1 to polytope2)
  * @param n Number of polytope pairs to process
+ * @note Witness points are written to simplices[i].witnesses[0] and simplices[i].witnesses[1]
  */
-__global__ void compute_epa_kernel(const gkPolytope* polytopes1, const gkPolytope* polytopes2,
-  gkSimplex* simplices, gkFloat* distances, gkFloat* witness1, gkFloat* witness2, gkFloat* contact_normals, const int n);
+__global__ void compute_epa_kernel(const gkPolytope* polytopes1, const gkPolytope* polytypes2,
+  gkSimplex* simplices, gkFloat* distances, gkFloat* contact_normals, const int n);
 
 // ============================================================================
 // HIGH-LEVEL API: Automatic memory management
@@ -148,7 +133,6 @@ __global__ void compute_epa_kernel(const gkPolytope* polytopes1, const gkPolytop
  *
  * @note Polytope coordinates (bd.coord) should use flattened array format:
  *       [x0, y0, z0, x1, y1, z1, ...] for efficient GPU memory access.
- * @note Precision (float/double) controlled by USE_32BITS compile flag.
  */
 void compute_minimum_distance(
     const int n,
@@ -167,21 +151,17 @@ void compute_minimum_distance(
  * @param n               Number of polytope pairs to process
  * @param bd1             Array of first polytopes (host memory)
  * @param bd2             Array of second polytopes (host memory)
- * @param simplices       Array of simplices (host memory, input/output)
+ * @param simplices       Array of simplices (host memory, input/output); witness points written to simplices[i].witnesses[0/1]
  * @param distances       Array of distances (host memory, input/output)
- * @param witness1        Array to store witness points on first polytope (n*3 floats)
- * @param witness2        Array to store witness points on second polytope (n*3 floats)
- * @param contact_normals Optional array to store contact normals (n*3 floats, can be nullptr)
+ * @param contact_normals Array to store contact normals (n*3 floats)
  */
-void compute_epa(
+void computeCollisionInformation(
     const int n,
     const gkPolytope* bd1,
     const gkPolytope* bd2,
     gkSimplex* simplices,
     gkFloat* distances,
-    gkFloat* witness1,
-    gkFloat* witness2,
-    gkFloat* contact_normals = nullptr
+    gkFloat* contact_normals
 );
 
 /**
@@ -190,13 +170,12 @@ void compute_epa(
  * First runs GJK to detect collisions, then runs EPA for colliding pairs.
  * Handles all GPU memory allocation and transfers internally.
  *
- * @param n         Number of polytope pairs to process
- * @param bd1       Array of first polytopes (host memory)
- * @param bd2       Array of second polytopes (host memory)
- * @param simplices Array to store resulting simplices (host memory)
- * @param distances Array to store distances/penetration depths (host memory)
- * @param witness1  Array to store witness points on first polytope (n*3 floats)
- * @param witness2  Array to store witness points on second polytope (n*3 floats)
+ * @param n               Number of polytope pairs to process
+ * @param bd1             Array of first polytopes (host memory)
+ * @param bd2             Array of second polytopes (host memory)
+ * @param simplices       Array to store resulting simplices (host memory)
+ * @param distances       Array to store distances/penetration depths (host memory)
+ * @param contact_normals Array to store contact normals (n*3 floats, host memory)
  */
 void compute_gjk_epa(
     const int n,
@@ -204,31 +183,7 @@ void compute_gjk_epa(
     const gkPolytope* bd2,
     gkSimplex* simplices,
     gkFloat* distances,
-    gkFloat* witness1,
-    gkFloat* witness2
-);
-
-/**
- * @brief Computes minimum distance using indexed polytope pairs (high-level API).
- *
- * Uses a single polytope array with index pairs for collision checks.
- * More efficient when polytopes are reused in multiple collision tests.
- * Handles all GPU memory allocation and transfers internally.
- *
- * @param num_polytopes Total number of unique polytopes
- * @param num_pairs     Number of collision pairs to check
- * @param polytopes     Array of all polytopes (host memory)
- * @param pairs         Array of index pairs specifying which polytopes to check (host memory)
- * @param simplices     Array to store resulting simplices (host memory)
- * @param distances     Array to store distances (host memory)
- */
-void compute_minimum_distance_indexed(
-    const int num_polytopes,
-    const int num_pairs,
-    const gkPolytope* polytopes,
-    const gkCollisionPair* pairs,
-    gkSimplex* simplices,
-    gkFloat* distances
+    gkFloat* contact_normals
 );
 
 // ============================================================================
@@ -236,70 +191,52 @@ void compute_minimum_distance_indexed(
 // ============================================================================
 
 /**
- * @brief Computes minimum distance using GPU pointers (device memory).
+ * @brief Allocate device memory for EPA-specific arrays.
  *
- * Low-level API that assumes all data is already on the GPU. Does not perform
- * any memory allocation or transfers - only launches the kernel. Use this when
- * you manage GPU memory externally for optimal performance.
- *
- * @param n         Number of polytope pairs to process
- * @param d_bd1     Array of first polytopes (device memory)
- * @param d_bd2     Array of second polytopes (device memory)
- * @param d_simplices Array to store resulting simplices (device memory)
- * @param d_distances Array to store distances (device memory)
- *
- * @note All pointers must point to device (GPU) memory.
- * @note Polytope coord pointers within gkPolytope structs must also point to device memory.
+ * @param n                 Number of polytope pairs
+ * @param d_witness1        Output: device pointer to witness points on first polytope (n*3 floats)
+ * @param d_witness2        Output: device pointer to witness points on second polytope (n*3 floats)
+ * @param d_contact_normals Output: device pointer to contact normals (n*3 floats, nullable)
  */
-void compute_minimum_distance_device(
+void allocate_epa_device_arrays(
     const int n,
-    const gkPolytope* d_bd1,
-    const gkPolytope* d_bd2,
-    gkSimplex* d_simplices,
-    gkFloat* d_distances
+    gkFloat** d_witness1,
+    gkFloat** d_witness2,
+    gkFloat** d_contact_normals
 );
 
 /**
- * @brief Computes minimum distance using indexed polytope pairs with GPU pointers (device memory).
+ * @brief Copy EPA results from device to host memory.
  *
- * Low-level API that assumes all data is already on the GPU. Does not perform
- * any memory allocation or transfers - only launches the kernel.
- *
- * @param num_pairs   Number of collision pairs to check
- * @param d_polytopes Device pointer to polytope array
- * @param d_pairs     Device pointer to collision pair indices
- * @param d_simplices Device pointer to simplex array (output)
- * @param d_distances Device pointer to distance array (output)
+ * @param n                 Number of polytope pairs
+ * @param d_witness1        Device pointer to witness points on first polytope (source)
+ * @param d_witness2        Device pointer to witness points on second polytope (source)
+ * @param d_contact_normals Device pointer to contact normals (source, nullable)
+ * @param witness1          Host array for witness points on first polytope (destination)
+ * @param witness2          Host array for witness points on second polytope (destination)
+ * @param contact_normals   Host array for contact normals (destination, nullable)
  */
-void compute_minimum_distance_indexed_device(
-    const int num_pairs,
-    const gkPolytope* d_polytopes,
-    const gkCollisionPair* d_pairs,
-    gkSimplex* d_simplices,
-    gkFloat* d_distances
+void copy_epa_results_from_device(
+    const int n,
+    const gkFloat* d_witness1,
+    const gkFloat* d_witness2,
+    const gkFloat* d_contact_normals,
+    gkFloat* witness1,
+    gkFloat* witness2,
+    gkFloat* contact_normals
 );
 
 /**
- * @brief Computes EPA using GPU pointers (device memory).
+ * @brief Free device memory allocated by allocate_epa_device_arrays.
  *
- * @param n               Number of polytope pairs
- * @param d_bd1           Device pointer to first polytopes
- * @param d_bd2           Device pointer to second polytopes
- * @param d_simplices     Device pointer to simplices
- * @param d_distances     Device pointer to distances
- * @param d_witness1      Device pointer to witness points for bd1
- * @param d_witness2      Device pointer to witness points for bd2
- * @param d_contact_normals Device pointer to contact normals (can be nullptr)
+ * @param d_witness1        Device pointer to witness points on first polytope
+ * @param d_witness2        Device pointer to witness points on second polytope
+ * @param d_contact_normals Device pointer to contact normals
  */
-void compute_epa_device(
-    const int n,
-    const gkPolytope* d_bd1,
-    const gkPolytope* d_bd2,
-    gkSimplex* d_simplices,
-    gkFloat* d_distances,
+void free_epa_device_arrays(
     gkFloat* d_witness1,
     gkFloat* d_witness2,
-    gkFloat* d_contact_normals = nullptr
+    gkFloat* d_contact_normals
 );
 
 /**
@@ -330,22 +267,44 @@ void allocate_and_copy_device_arrays(
     gkFloat** d_distances
 );
 
+
 /**
- * @brief Allocate device memory for EPA outputs only.
+ * @brief Computes minimum distance using GPU pointers (device memory).
  *
- * Call this separately if you need EPA. More efficient than allocating
- * witness points when only running GJK.
+ * Low-level API that assumes all data is already on the GPU. Does not perform
+ * any memory allocation or transfers - only launches the kernel.
+ *
+ * @param n         Number of polytope pairs to process
+ * @param d_bd1     Array of first polytopes (device memory)
+ * @param d_bd2     Array of second polytopes (device memory)
+ * @param d_simplices Array to store resulting simplices (device memory)
+ * @param d_distances Array to store distances (device memory)
+ */
+void compute_minimum_distance_device(
+    const int n,
+    const gkPolytope* d_bd1,
+    const gkPolytope* d_bd2,
+    gkSimplex* d_simplices,
+    gkFloat* d_distances
+);
+
+/**
+ * @brief Computes EPA using GPU pointers (device memory).
  *
  * @param n               Number of polytope pairs
- * @param d_witness1      Output: device pointer to witness points for bd1
- * @param d_witness2      Output: device pointer to witness points for bd2
- * @param d_contact_normals Output: device pointer to contact normals (nullptr to skip)
+ * @param d_bd1           Device pointer to first polytopes
+ * @param d_bd2           Device pointer to second polytopes
+ * @param d_simplices       Device pointer to simplices; witness points written to simplices[i].witnesses[0/1]
+ * @param d_distances       Device pointer to distances
+ * @param d_contact_normals Device pointer to contact normals (n*3 floats)
  */
-void allocate_epa_device_arrays(
+void compute_epa_device(
     const int n,
-    gkFloat** d_witness1,
-    gkFloat** d_witness2,
-    gkFloat** d_contact_normals = nullptr
+    const gkPolytope* d_bd1,
+    const gkPolytope* d_bd2,
+    gkSimplex* d_simplices,
+    gkFloat* d_distances,
+    gkFloat* d_contact_normals
 );
 
 /**
@@ -365,26 +324,6 @@ void copy_results_from_device(
     gkFloat* distances
 );
 
-/**
- * @brief Copy EPA results from device to host memory.
- *
- * @param n               Number of polytope pairs
- * @param d_witness1      Device pointer to witness points for bd1
- * @param d_witness2      Device pointer to witness points for bd2
- * @param d_contact_normals Device pointer to contact normals (nullptr to skip)
- * @param witness1        Host array for witness points (destination)
- * @param witness2        Host array for witness points (destination)
- * @param contact_normals Host array for contact normals (destination, nullptr to skip)
- */
-void copy_epa_results_from_device(
-    const int n,
-    const gkFloat* d_witness1,
-    const gkFloat* d_witness2,
-    const gkFloat* d_contact_normals,
-    gkFloat* witness1,
-    gkFloat* witness2,
-    gkFloat* contact_normals = nullptr
-);
 
 /**
  * @brief Free device memory allocated by allocate_and_copy_device_arrays.
@@ -405,17 +344,181 @@ void free_device_arrays(
     gkFloat* d_distances
 );
 
+
+// ============================================================================
+// INDEXED API: For reusable polytopes with index pairs
+// ============================================================================
+
 /**
- * @brief Free EPA device arrays allocated by allocate_epa_device_arrays.
- *
- * @param d_witness1      Device pointer to witness points for bd1
- * @param d_witness2      Device pointer to witness points for bd2
- * @param d_contact_normals Device pointer to contact normals (nullptr to skip)
+ * @brief Index pair specifying which polytopes to check for collision.
  */
-void free_epa_device_arrays(
-    gkFloat* d_witness1,
-    gkFloat* d_witness2,
-    gkFloat* d_contact_normals = nullptr
+struct gkCollisionPair {
+    int idx1;  // Index of first polytope
+    int idx2;  // Index of second polytope
+};
+
+/**
+ * @brief Allocate device memory and copy indexed polytope data to GPU.
+ *
+ * Concatenates all polytope coordinates into a single device buffer and
+ * patches device-side coord pointers accordingly.
+ *
+ * @param num_polytopes Total number of unique polytopes
+ * @param polytopes     Array of all polytopes (host memory)
+ * @param d_polytopes   Output: device pointer to polytope array
+ * @param d_coords      Output: device pointer to concatenated coordinates
+ */
+void allocate_and_copy_indexed_polytopes(
+    const int num_polytopes,
+    const gkPolytope* polytopes,
+    gkPolytope** d_polytopes,
+    gkFloat** d_coords
+);
+
+/**
+ * @brief Copy collision pair indices to a pre-allocated device buffer.
+ *
+ * @param num_pairs Number of collision pairs
+ * @param pairs     Array of index pairs (host memory)
+ * @param d_pairs   Device pointer to destination buffer (must be pre-allocated)
+ */
+void upload_pairs_device(
+    const int num_pairs,
+    const gkCollisionPair* pairs,
+    gkCollisionPair* d_pairs
+);
+
+/*! @brief Invoke the warp-parallel GJK algorithm using indexed polytope pairs.
+ * Uses 16 threads per collision. Thread i uses pairs[i] to look up polytopes. */
+__global__ void compute_minimum_distance_indexed_kernel(
+    const gkPolytope* polytopes,
+    const gkCollisionPair* pairs,
+    gkSimplex* simplices,
+    gkFloat* distances,
+    const int n
+);
+
+/**
+ * @brief Computes minimum distance using indexed polytope pairs (high-level API).
+ *
+ * Uses a single polytope array with index pairs for collision checks.
+ * More efficient when polytopes are reused in multiple collision tests.
+ * Handles all GPU memory allocation and transfers internally.
+ *
+ * @param num_polytopes Total number of unique polytopes
+ * @param num_pairs     Number of collision pairs to check
+ * @param polytopes     Array of all polytopes (host memory)
+ * @param pairs         Array of index pairs specifying which polytopes to check (host memory)
+ * @param simplices     Array to store resulting simplices (host memory)
+ * @param distances     Array to store distances (host memory)
+ */
+void compute_minimum_distance_indexed(
+    const int num_polytopes,
+    const int num_pairs,
+    const gkPolytope* polytopes,
+    const gkCollisionPair* pairs,
+    gkSimplex* simplices,
+    gkFloat* distances
+);
+
+/**
+ * @brief Computes minimum distance using indexed polytope pairs (device memory).
+ *
+ * Low-level API that assumes all data is already on the GPU. Launches
+ * compute_minimum_distance_indexed_kernel directly.
+ *
+ * @param num_pairs   Number of collision pairs
+ * @param d_polytopes Device pointer to polytope array
+ * @param d_pairs     Device pointer to collision pairs
+ * @param d_simplices Device pointer to simplex array (output)
+ * @param d_distances Device pointer to distance array (output)
+ */
+void compute_minimum_distance_indexed_device(
+    const int num_pairs,
+    const gkPolytope* d_polytopes,
+    const gkCollisionPair* d_pairs,
+    gkSimplex* d_simplices,
+    gkFloat* d_distances
+);
+
+// Indexed EPA kernel
+__global__ void compute_epa_kernel_indexed_kernel(
+  const gkPolytope* polytopes,
+  const gkCollisionPair* pairs,
+  gkSimplex* simplices,
+  gkFloat* distances,
+  gkFloat* contact_normals,
+  const int n
+);
+
+/**
+ * @brief Computes EPA using indexed polytope pairs (device memory).
+ *
+ * Low-level API that assumes all data is already on the GPU. Launches
+ * compute_epa_kernel_indexed_kernel directly.
+ *
+ * @param num_pairs       Number of collision pairs
+ * @param d_polytopes     Device pointer to polytope array
+ * @param d_pairs         Device pointer to collision pairs
+ * @param d_simplices       Device pointer to simplex array (input/output); witness points written to simplices[i].witnesses[0/1]
+ * @param d_distances       Device pointer to distance array (input/output)
+ * @param d_contact_normals Device pointer to contact normals (num_pairs*3 floats)
+ */
+void compute_epa_indexed_device(
+    const int num_pairs,
+    const gkPolytope* d_polytopes,
+    const gkCollisionPair* d_pairs,
+    gkSimplex* d_simplices,
+    gkFloat* d_distances,
+    gkFloat* d_contact_normals
+);
+
+/**
+ * @brief Computes EPA using indexed polytope pairs (high-level API).
+ *
+ * Uses a single polytope array with index pairs. Takes pre-computed simplices
+ * and distances from GJK as input. Handles all GPU memory internally.
+ *
+ * @param num_polytopes   Total number of unique polytopes
+ * @param num_pairs       Number of collision pairs
+ * @param polytopes       Array of all polytopes (host memory)
+ * @param pairs           Array of index pairs (host memory)
+ * @param simplices       Simplex array from GJK (host memory, input/output); witness points written to simplices[i].witnesses[0/1]
+ * @param distances       Distance array from GJK (host memory, input/output)
+ * @param contact_normals Output contact normals (num_pairs*3 floats)
+ */
+void compute_epa_indexed(
+    const int num_polytopes,
+    const int num_pairs,
+    const gkPolytope* polytopes,
+    const gkCollisionPair* pairs,
+    gkSimplex* simplices,
+    gkFloat* distances,
+    gkFloat* contact_normals
+);
+
+/**
+ * @brief Computes GJK and EPA using indexed polytope pairs (high-level API).
+ *
+ * First runs GJK to detect collisions, then runs EPA for colliding pairs.
+ * Handles all GPU memory internally.
+ *
+ * @param num_polytopes   Total number of unique polytopes
+ * @param num_pairs       Number of collision pairs
+ * @param polytopes       Array of all polytopes (host memory)
+ * @param pairs           Array of index pairs (host memory)
+ * @param simplices       Output simplex array (host memory); witness points written to simplices[i].witnesses[0/1]
+ * @param distances       Output distances/penetration depths (host memory)
+ * @param contact_normals Output contact normals (num_pairs*3 floats)
+ */
+void compute_gjk_epa_indexed(
+    const int num_polytopes,
+    const int num_pairs,
+    const gkPolytope* polytopes,
+    const gkCollisionPair* pairs,
+    gkSimplex* simplices,
+    gkFloat* distances,
+    gkFloat* contact_normals
 );
 
 #ifdef __cplusplus

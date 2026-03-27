@@ -94,6 +94,43 @@ _lib = ctypes.CDLL(_find_library())
 
 
 # ============================================================================
+# CUDA Runtime (device memory management for GpuBatch)
+# ============================================================================
+
+_cudart = None
+
+def _get_cudart():
+    global _cudart
+    if _cudart is not None:
+        return _cudart
+    names = (
+        ["cudart64_120.dll", "cudart64_12.dll", "cudart64_110.dll"]
+        if sys.platform == "win32"
+        else ["libcudart.so.12", "libcudart.so.11", "libcudart.so"]
+    )
+    for name in names:
+        try:
+            lib = ctypes.CDLL(name)
+            lib.cudaMalloc.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_size_t]
+            lib.cudaMalloc.restype  = ctypes.c_int
+            lib.cudaFree.argtypes   = [ctypes.c_void_p]
+            lib.cudaFree.restype    = ctypes.c_int
+            _cudart = lib
+            return lib
+        except OSError:
+            pass
+    raise RuntimeError("Could not load CUDA runtime library (cudart)")
+
+def _cuda_malloc(ptr_ref, size):
+    _get_cudart().cudaMalloc(ptr_ref, size)
+
+def _cuda_free(ptr):
+    if ptr.value:
+        _get_cudart().cudaFree(ptr)
+        ptr.value = None
+
+
+# ============================================================================
 # Function Signatures
 # ============================================================================
 
@@ -166,11 +203,9 @@ _lib.compute_epa_device.argtypes = [
     ctypes.c_int,    # n
     ctypes.c_void_p, # d_bd1
     ctypes.c_void_p, # d_bd2
-    ctypes.c_void_p, # d_simplices
+    ctypes.c_void_p, # d_simplices (witnesses -> simplices[i].witnesses[0/1])
     ctypes.c_void_p, # d_distances
-    ctypes.c_void_p, # d_witness1
-    ctypes.c_void_p, # d_witness2
-    ctypes.c_void_p, # d_contact_normals (nullable)
+    ctypes.c_void_p, # d_contact_normals
 ]
 _lib.compute_epa_device.restype = None
 
@@ -191,6 +226,64 @@ _lib.free_epa_device_arrays.argtypes = [
     ctypes.c_void_p, # d_contact_normals (nullable)
 ]
 _lib.free_epa_device_arrays.restype = None
+
+# --- High-level: EPA ---
+
+_lib.computeCollisionInformation.argtypes = [
+    ctypes.c_int,               # n
+    ctypes.POINTER(gkPolytope), # bd1
+    ctypes.POINTER(gkPolytope), # bd2
+    ctypes.POINTER(gkSimplex),  # simplices (in/out); witnesses -> simplices[i].witnesses[0/1]
+    ctypes.POINTER(gkFloat),    # distances (in/out)
+    ctypes.POINTER(gkFloat),    # contact_normals (n*3 floats)
+]
+_lib.computeCollisionInformation.restype = None
+
+_lib.compute_gjk_epa.argtypes = [
+    ctypes.c_int,               # n
+    ctypes.POINTER(gkPolytope), # bd1
+    ctypes.POINTER(gkPolytope), # bd2
+    ctypes.POINTER(gkSimplex),  # simplices (out); witnesses -> simplices[i].witnesses[0/1]
+    ctypes.POINTER(gkFloat),    # distances (out)
+    ctypes.POINTER(gkFloat),    # contact_normals (n*3 floats)
+]
+_lib.compute_gjk_epa.restype = None
+
+# --- Mid-level: indexed pool ---
+
+_lib.allocate_and_copy_indexed_polytopes.argtypes = [
+    ctypes.c_int,                    # num_polytopes
+    ctypes.POINTER(gkPolytope),      # polytopes (host)
+    ctypes.POINTER(ctypes.c_void_p), # d_polytopes (out)
+    ctypes.POINTER(ctypes.c_void_p), # d_coords (out)
+]
+_lib.allocate_and_copy_indexed_polytopes.restype = None
+
+_lib.upload_pairs_device.argtypes = [
+    ctypes.c_int,                    # num_pairs
+    ctypes.POINTER(gkCollisionPair), # pairs (host)
+    ctypes.c_void_p,                 # d_pairs (pre-allocated device)
+]
+_lib.upload_pairs_device.restype = None
+
+_lib.compute_minimum_distance_indexed_device.argtypes = [
+    ctypes.c_int,    # num_pairs
+    ctypes.c_void_p, # d_polytopes
+    ctypes.c_void_p, # d_pairs
+    ctypes.c_void_p, # d_simplices
+    ctypes.c_void_p, # d_distances
+]
+_lib.compute_minimum_distance_indexed_device.restype = None
+
+_lib.compute_epa_indexed_device.argtypes = [
+    ctypes.c_int,    # num_pairs
+    ctypes.c_void_p, # d_polytopes
+    ctypes.c_void_p, # d_pairs
+    ctypes.c_void_p, # d_simplices (witnesses -> simplices[i].witnesses[0/1])
+    ctypes.c_void_p, # d_distances
+    ctypes.c_void_p, # d_contact_normals
+]
+_lib.compute_epa_indexed_device.restype = None
 
 
 # ============================================================================
@@ -243,201 +336,143 @@ class SimplexArray:
     def as_ptr(self):
         return ctypes.cast(self._array, ctypes.POINTER(gkSimplex))
 
-    def extract(self):
-        """Return (witnesses1, witnesses2, nvrtx) as numpy arrays."""
-        witnesses1 = np.empty((self.n, 3), dtype=DTYPE)
-        witnesses2 = np.empty((self.n, 3), dtype=DTYPE)
-        nvrtx = np.empty(self.n, dtype=np.int32)
-        for i in range(self.n):
-            s = self._array[i]
-            witnesses1[i] = s.witnesses[0]
-            witnesses2[i] = s.witnesses[1]
-            nvrtx[i] = s.nvrtx
-        return witnesses1, witnesses2, nvrtx
+    def extract(self, n=None):
+        """Return (witnesses1, witnesses2) as numpy arrays for the first n entries."""
+        if n is None:
+            n = self.n
+        stride  = ctypes.sizeof(gkSimplex)
+        w_off   = gkSimplex.witnesses.offset  # byte offset of witnesses field
+        raw = np.frombuffer(
+            (ctypes.c_byte * (n * stride)).from_address(ctypes.addressof(self._array[0])),
+            dtype=DTYPE,
+        ).reshape(n, stride // ctypes.sizeof(gkFloat))
+        w_col = w_off // ctypes.sizeof(gkFloat)
+        witnesses = raw[:, w_col : w_col + 6].reshape(n, 2, 3)
+        return witnesses[:, 0, :].copy(), witnesses[:, 1, :].copy()
 
 
 class GpuBatch:
     """
-    Owns GPU memory for a fixed set of polytope pairs.
+    Holds a pool of polytopes in GPU memory for repeated indexed collision queries.
 
-    Upload happens once at construction. GJK and EPA can be called
-    repeatedly without re-allocating or re-copying polytope data.
+    Polytope data is uploaded once at construction. Call compute() or compute_epa()
+    with different index pair arrays to run GJK/EPA without re-uploading polytope data.
 
     Args:
-        bd1:      First polytope array.
-        bd2:      Second polytope array.
-        with_epa: Pre-allocate GPU witness/normals buffers for EPA (default False).
+        polytopes: PolytopeArray, (M, V, 3) ndarray, or list of (V_i, 3) arrays.
+        max_pairs: Maximum number of collision pairs per compute call.
+        with_epa:  Pre-allocate contact-normals buffer for EPA (default False).
     """
 
-    def __init__(
-        self,
-        bd1: PolytopeArray,
-        bd2: PolytopeArray,
-        with_epa: bool = False,
-    ):
-        if bd1.n != bd2.n:
-            raise ValueError(f"bd1 has {bd1.n} polytopes but bd2 has {bd2.n}")
-        self.n = bd1.n
-        self._bd1 = bd1
-        self._bd2 = bd2
+    def __init__(self, polytopes, max_pairs: int, with_epa: bool = False):
+        self._bd       = _to_polytope_array(polytopes)
+        self.max_pairs = max_pairs
         self._with_epa = with_epa
 
-        # Host output buffers (pre-allocated, reused across calls)
-        self._simplices  = SimplexArray(self.n)
-        self._distances  = np.zeros(self.n, dtype=DTYPE)
+        # Upload pool to device once
+        self._d_polytopes = ctypes.c_void_p()
+        self._d_coords    = ctypes.c_void_p()
+        _lib.allocate_and_copy_indexed_polytopes(
+            self._bd.n,
+            self._bd.as_ptr(),
+            ctypes.byref(self._d_polytopes),
+            ctypes.byref(self._d_coords),
+        )
 
-        # GJK device pointers
-        self._d_bd1       = ctypes.c_void_p()
-        self._d_bd2       = ctypes.c_void_p()
-        self._d_coord1    = ctypes.c_void_p()
-        self._d_coord2    = ctypes.c_void_p()
+        # Pre-allocate device buffers sized for max_pairs
+        self._d_pairs     = ctypes.c_void_p()
         self._d_simplices = ctypes.c_void_p()
         self._d_distances = ctypes.c_void_p()
+        _cuda_malloc(ctypes.byref(self._d_pairs),     max_pairs * ctypes.sizeof(gkCollisionPair))
+        _cuda_malloc(ctypes.byref(self._d_simplices), max_pairs * ctypes.sizeof(gkSimplex))
+        _cuda_malloc(ctypes.byref(self._d_distances), max_pairs * ctypes.sizeof(gkFloat))
 
-        _lib.allocate_and_copy_device_arrays(
-            self.n,
-            bd1.as_ptr(), bd2.as_ptr(),
-            ctypes.byref(self._d_bd1),
-            ctypes.byref(self._d_bd2),
-            ctypes.byref(self._d_coord1),
-            ctypes.byref(self._d_coord2),
-            ctypes.byref(self._d_simplices),
-            ctypes.byref(self._d_distances),
-        )
+        # Host result buffers (reused across calls)
+        self._simplices = SimplexArray(max_pairs)
+        self._distances = np.zeros(max_pairs, dtype=DTYPE)
 
-        # EPA device pointers and host buffers (only GPU memory allocated when requested)
-        self._d_witness1        = ctypes.c_void_p()
-        self._d_witness2        = ctypes.c_void_p()
+        # EPA device + host buffers
         self._d_contact_normals = ctypes.c_void_p()
-        self._witnesses1        = np.empty((self.n, 3), dtype=DTYPE)
-        self._witnesses2        = np.empty((self.n, 3), dtype=DTYPE)
-        self._contact_normals   = np.empty((self.n, 3), dtype=DTYPE)
+        self._contact_normals   = np.empty((max_pairs, 3), dtype=DTYPE)
+        if with_epa:
+            _cuda_malloc(ctypes.byref(self._d_contact_normals), max_pairs * 3 * ctypes.sizeof(gkFloat))
 
-        if self._with_epa:
-            # Always allocate d_contact_normals — the EPA kernel writes to it
-            # unconditionally in its non-collision branch, so passing null
-            # causes a GPU memory error that corrupts all subsequent results.
-            _lib.allocate_epa_device_arrays(
-                self.n,
-                ctypes.byref(self._d_witness1),
-                ctypes.byref(self._d_witness2),
-                ctypes.byref(self._d_contact_normals),
-            )
+    def _upload_pairs(self, pairs: np.ndarray) -> int:
+        pairs = np.ascontiguousarray(pairs, dtype=np.int32)
+        n = pairs.shape[0]
+        if n > self.max_pairs:
+            raise ValueError(f"pairs count {n} exceeds max_pairs {self.max_pairs}")
+        _lib.upload_pairs_device(
+            n,
+            pairs.ctypes.data_as(ctypes.POINTER(gkCollisionPair)),
+            self._d_pairs,
+        )
+        return n
 
-    def compute_gjk(self) -> dict:
-        _lib.compute_minimum_distance_device(
-            self.n,
-            self._d_bd1, self._d_bd2,
+    def compute(self, pairs: np.ndarray) -> dict:
+        pairs = np.asarray(pairs, dtype=np.int32).reshape(-1, 2)
+        n = self._upload_pairs(pairs)
+        _lib.compute_minimum_distance_indexed_device(
+            n,
+            self._d_polytopes, self._d_pairs,
             self._d_simplices, self._d_distances,
         )
         _lib.copy_results_from_device(
-            self.n,
+            n,
             self._d_simplices, self._d_distances,
             self._simplices.as_ptr(),
             self._distances.ctypes.data_as(ctypes.POINTER(gkFloat)),
         )
-        witnesses1, witnesses2, nvrtx = self._simplices.extract()
+        witnesses1, witnesses2 = self._simplices.extract(n)
         return {
-            'distances':     self._distances.copy(),
-            'witnesses1':    witnesses1,
-            'witnesses2':    witnesses2,
-            'is_collision':  np.abs(self._distances) < 1e-6,
-            'simplex_nvrtx': nvrtx,
+            'distances':    self._distances[:n].copy(),
+            'witnesses1':   witnesses1,
+            'witnesses2':   witnesses2,
+            'is_collision': np.abs(self._distances[:n]) < 1e-6,
         }
 
-    def compute_epa(self) -> dict:
+    def compute_epa(self, pairs: np.ndarray) -> dict:
         if not self._with_epa:
             raise RuntimeError("GpuBatch was created without with_epa=True")
-
-        # GJK must run first — EPA expands the GJK simplex
-        _lib.compute_minimum_distance_device(
-            self.n,
-            self._d_bd1, self._d_bd2,
+        pairs = np.asarray(pairs, dtype=np.int32).reshape(-1, 2)
+        n = self._upload_pairs(pairs)
+        _lib.compute_minimum_distance_indexed_device(
+            n,
+            self._d_polytopes, self._d_pairs,
             self._d_simplices, self._d_distances,
         )
-        _lib.compute_epa_device(
-            self.n,
-            self._d_bd1, self._d_bd2,
+        _lib.compute_epa_indexed_device(
+            n,
+            self._d_polytopes, self._d_pairs,
             self._d_simplices, self._d_distances,
-            self._d_witness1, self._d_witness2,
-            self._d_contact_normals,  # null c_void_p if not with_normals
-        )
-        _lib.copy_epa_results_from_device(
-            self.n,
-            self._d_witness1, self._d_witness2, self._d_contact_normals,
-            self._witnesses1.ctypes.data_as(ctypes.POINTER(gkFloat)),
-            self._witnesses2.ctypes.data_as(ctypes.POINTER(gkFloat)),
-            self._contact_normals.ctypes.data_as(ctypes.POINTER(gkFloat)),
-        )
-        # Copy distances back too (EPA overwrites them with penetration depths)
-        _lib.copy_results_from_device(
-            self.n,
-            self._d_simplices, self._d_distances,
-            self._simplices.as_ptr(),
-            self._distances.ctypes.data_as(ctypes.POINTER(gkFloat)),
-        )
-        return {
-            'penetration_depths': self._distances.copy(),
-            'witnesses1':         self._witnesses1.copy(),
-            'witnesses2':         self._witnesses2.copy(),
-            'contact_normals':    self._contact_normals.copy(),
-        }
-
-    def compute_gjk_epa(self) -> dict:
-        if not self._with_epa:
-            raise RuntimeError("GpuBatch was created without with_epa=True")
-
-        gjk = self.compute_gjk()
-
-        _lib.compute_epa_device(
-            self.n,
-            self._d_bd1, self._d_bd2,
-            self._d_simplices, self._d_distances,
-            self._d_witness1, self._d_witness2,
             self._d_contact_normals,
         )
-        _lib.copy_epa_results_from_device(
-            self.n,
-            self._d_witness1, self._d_witness2, self._d_contact_normals,
-            self._witnesses1.ctypes.data_as(ctypes.POINTER(gkFloat)),
-            self._witnesses2.ctypes.data_as(ctypes.POINTER(gkFloat)),
-            self._contact_normals.ctypes.data_as(ctypes.POINTER(gkFloat)),
-        )
         _lib.copy_results_from_device(
-            self.n,
+            n,
             self._d_simplices, self._d_distances,
             self._simplices.as_ptr(),
             self._distances.ctypes.data_as(ctypes.POINTER(gkFloat)),
         )
-
-        # Colliding pairs: use EPA witnesses + penetration depth
-        # Separated pairs: use GJK witnesses + distance
-        is_col = gjk['is_collision']
-        witnesses1 = np.where(is_col[:, None], self._witnesses1, gjk['witnesses1'])
-        witnesses2 = np.where(is_col[:, None], self._witnesses2, gjk['witnesses2'])
-
+        _lib.copy_epa_results_from_device(
+            n,
+            ctypes.c_void_p(), ctypes.c_void_p(), self._d_contact_normals,
+            ctypes.c_void_p(), ctypes.c_void_p(),
+            self._contact_normals.ctypes.data_as(ctypes.POINTER(gkFloat)),
+        )
+        witnesses1, witnesses2 = self._simplices.extract(n)
         return {
-            'distances':        self._distances.copy(),
-            'is_collision':     is_col,
-            'witnesses1':       witnesses1,
-            'witnesses2':       witnesses2,
-            'contact_normals':  self._contact_normals.copy(),
-            'simplex_nvrtx':    gjk['simplex_nvrtx'],
+            'penetration_depths': self._distances[:n].copy(),
+            'witnesses1':         witnesses1,
+            'witnesses2':         witnesses2,
+            'contact_normals':    self._contact_normals[:n].copy(),
         }
 
     def __del__(self):
-        if hasattr(self, '_d_bd1') and self._d_bd1.value:
-            _lib.free_device_arrays(
-                self._d_bd1, self._d_bd2,
-                self._d_coord1, self._d_coord2,
-                self._d_simplices, self._d_distances,
-            )
-        if hasattr(self, '_with_epa') and self._with_epa and self._d_witness1.value:
-            _lib.free_epa_device_arrays(
-                self._d_witness1,
-                self._d_witness2,
-                self._d_contact_normals,
-            )
+        for attr in ('_d_polytopes', '_d_coords', '_d_pairs', '_d_simplices', '_d_distances'):
+            if hasattr(self, attr):
+                _cuda_free(getattr(self, attr))
+        if hasattr(self, '_with_epa') and self._with_epa:
+            _cuda_free(self._d_contact_normals)
 
 
 # ============================================================================
@@ -486,35 +521,22 @@ class IndexedBatch:
         Returns:
             Same keys as GpuBatch.compute_gjk().
         """
-        pairs = np.asarray(pairs, dtype=np.int32)
-        if pairs.ndim != 2 or pairs.shape[1] != 2:
-            raise ValueError(f"pairs must have shape (n_pairs, 2), got {pairs.shape}")
+        pairs = np.ascontiguousarray(pairs, dtype=np.int32).reshape(-1, 2)
         num_pairs = pairs.shape[0]
-
-        pairs_array = (gkCollisionPair * num_pairs)()
-        for i in range(num_pairs):
-            pairs_array[i].idx1 = int(pairs[i, 0])
-            pairs_array[i].idx2 = int(pairs[i, 1])
-
         simplices = SimplexArray(num_pairs)
         distances = np.zeros(num_pairs, dtype=DTYPE)
-
         _lib.compute_minimum_distance_indexed(
-            self._bd.n,
-            num_pairs,
-            self._bd.as_ptr(),
-            ctypes.cast(pairs_array, ctypes.POINTER(gkCollisionPair)),
+            self._bd.n, num_pairs, self._bd.as_ptr(),
+            pairs.ctypes.data_as(ctypes.POINTER(gkCollisionPair)),
             simplices.as_ptr(),
             distances.ctypes.data_as(ctypes.POINTER(gkFloat)),
         )
-
-        witnesses1, witnesses2, nvrtx = simplices.extract()
+        witnesses1, witnesses2 = simplices.extract()
         return {
-            'distances':     distances,
-            'witnesses1':    witnesses1,
-            'witnesses2':    witnesses2,
-            'is_collision':  np.abs(distances) < 1e-6,
-            'simplex_nvrtx': nvrtx,
+            'distances':    distances,
+            'witnesses1':   witnesses1,
+            'witnesses2':   witnesses2,
+            'is_collision': np.abs(distances) < 1e-6,
         }
 
 
@@ -542,7 +564,21 @@ def compute_minimum_distance(
     """
     bd1 = _to_polytope_array(vertices1)
     bd2 = _to_polytope_array(vertices2)
-    return GpuBatch(bd1, bd2).compute_gjk()
+    n = bd1.n
+    simplices = SimplexArray(n)
+    distances = np.zeros(n, dtype=DTYPE)
+    _lib.compute_minimum_distance(
+        n, bd1.as_ptr(), bd2.as_ptr(),
+        simplices.as_ptr(),
+        distances.ctypes.data_as(ctypes.POINTER(gkFloat)),
+    )
+    witnesses1, witnesses2 = simplices.extract()
+    return {
+        'distances':    distances,
+        'witnesses1':   witnesses1,
+        'witnesses2':   witnesses2,
+        'is_collision': np.abs(distances) < 1e-6,
+    }
 
 
 def compute_minimum_distance_indexed(
@@ -560,36 +596,22 @@ def compute_minimum_distance_indexed(
         Same keys as compute_minimum_distance.
     """
     bd = _to_polytope_array(polytopes)
-
-    pairs = np.asarray(pairs, dtype=np.int32)
-    if pairs.ndim != 2 or pairs.shape[1] != 2:
-        raise ValueError(f"pairs must have shape (num_pairs, 2), got {pairs.shape}")
+    pairs = np.ascontiguousarray(pairs, dtype=np.int32).reshape(-1, 2)
     num_pairs = pairs.shape[0]
-
-    pairs_array = (gkCollisionPair * num_pairs)()
-    for i in range(num_pairs):
-        pairs_array[i].idx1 = int(pairs[i, 0])
-        pairs_array[i].idx2 = int(pairs[i, 1])
-
     simplices = SimplexArray(num_pairs)
     distances = np.zeros(num_pairs, dtype=DTYPE)
-
     _lib.compute_minimum_distance_indexed(
-        bd.n,
-        num_pairs,
-        bd.as_ptr(),
-        ctypes.cast(pairs_array, ctypes.POINTER(gkCollisionPair)),
+        bd.n, num_pairs, bd.as_ptr(),
+        pairs.ctypes.data_as(ctypes.POINTER(gkCollisionPair)),
         simplices.as_ptr(),
         distances.ctypes.data_as(ctypes.POINTER(gkFloat)),
     )
-
-    witnesses1, witnesses2, nvrtx = simplices.extract()
+    witnesses1, witnesses2 = simplices.extract()
     return {
-        'distances':     distances,
-        'witnesses1':    witnesses1,
-        'witnesses2':    witnesses2,
-        'is_collision':  np.abs(distances) < 1e-6,
-        'simplex_nvrtx': nvrtx,
+        'distances':    distances,
+        'witnesses1':   witnesses1,
+        'witnesses2':   witnesses2,
+        'is_collision': np.abs(distances) < 1e-6,
     }
 
 
@@ -612,7 +634,23 @@ def compute_epa(
     """
     bd1 = _to_polytope_array(vertices1)
     bd2 = _to_polytope_array(vertices2)
-    return GpuBatch(bd1, bd2, with_epa=True).compute_epa()
+    n = bd1.n
+    simplices = SimplexArray(n)
+    distances = np.zeros(n, dtype=DTYPE)
+    contact_normals = np.empty((n, 3), dtype=DTYPE)
+    _lib.computeCollisionInformation(
+        n, bd1.as_ptr(), bd2.as_ptr(),
+        simplices.as_ptr(),
+        distances.ctypes.data_as(ctypes.POINTER(gkFloat)),
+        contact_normals.ctypes.data_as(ctypes.POINTER(gkFloat)),
+    )
+    witnesses1, witnesses2 = simplices.extract()
+    return {
+        'penetration_depths': distances,
+        'witnesses1':         witnesses1,
+        'witnesses2':         witnesses2,
+        'contact_normals':    contact_normals,
+    }
 
 
 def compute_gjk_epa(
@@ -637,7 +675,24 @@ def compute_gjk_epa(
     """
     bd1 = _to_polytope_array(vertices1)
     bd2 = _to_polytope_array(vertices2)
-    return GpuBatch(bd1, bd2, with_epa=True).compute_gjk_epa()
+    n = bd1.n
+    simplices = SimplexArray(n)
+    distances = np.zeros(n, dtype=DTYPE)
+    contact_normals = np.empty((n, 3), dtype=DTYPE)
+    _lib.compute_gjk_epa(
+        n, bd1.as_ptr(), bd2.as_ptr(),
+        simplices.as_ptr(),
+        distances.ctypes.data_as(ctypes.POINTER(gkFloat)),
+        contact_normals.ctypes.data_as(ctypes.POINTER(gkFloat)),
+    )
+    witnesses1, witnesses2 = simplices.extract()
+    return {
+        'distances':       distances,
+        'is_collision':    np.abs(distances) < 1e-6,
+        'witnesses1':      witnesses1,
+        'witnesses2':      witnesses2,
+        'contact_normals': contact_normals,
+    }
 
 
 # ============================================================================

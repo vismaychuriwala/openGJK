@@ -1,7 +1,7 @@
 LIBRARY openGJK_GPU
 EXPORTS
     compute_minimum_distance
-    compute_epa
+    computeCollisionInformation
     compute_gjk_epa
     compute_minimum_distance_indexed
     compute_minimum_distance_device
