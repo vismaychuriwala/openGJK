@@ -12,11 +12,11 @@ from .opengjk_gpu import (
     IndexedBatch,
     compute_minimum_distance,
     compute_minimum_distance_indexed,
-    computeCollisionInformation,
+    compute_epa,
     compute_gjk_epa,
 )
 
-__version__ = "3.1.0"
+__version__ = "3.2.0"
 __all__ = [
     "USE_32BITS",
     "PolytopeArray",
@@ -25,6 +25,6 @@ __all__ = [
     "IndexedBatch",
     "compute_minimum_distance",
     "compute_minimum_distance_indexed",
-    "computeCollisionInformation",
+    "compute_epa",
     "compute_gjk_epa",
 ]

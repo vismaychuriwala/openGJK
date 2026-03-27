@@ -110,6 +110,15 @@ target_compile_options(openGJK_GPU PRIVATE "$<$<AND:$<CONFIG:Debug,RelWithDebInf
 # Alias for consistency with scalar/simd
 add_library(openGJK::gpu ALIAS openGJK_GPU)
 
+# Copy DLL into Python package source dir so pip install bundles it automatically
+if(WIN32)
+    add_custom_command(TARGET openGJK_GPU POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy
+            $<TARGET_FILE:openGJK_GPU>
+            ${CMAKE_CURRENT_SOURCE_DIR}/examples/python/src/pyopengjk_gpu/$<TARGET_FILE_NAME:openGJK_GPU>
+    )
+endif()
+
 # Build example
 add_subdirectory(examples/simple_collision)
 

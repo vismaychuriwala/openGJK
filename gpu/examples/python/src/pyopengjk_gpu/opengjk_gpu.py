@@ -19,7 +19,7 @@ from typing import List, Union
 # Precision
 # ============================================================================
 
-USE_32BITS = True  # Must match USE_32BITS compile flag
+USE_32BITS = False  # Must match USE_32BITS compile flag
 
 if USE_32BITS:
     gkFloat = ctypes.c_float
@@ -93,41 +93,6 @@ def _find_library():
 _lib = ctypes.CDLL(_find_library())
 
 
-# ============================================================================
-# CUDA Runtime (device memory management for GpuBatch)
-# ============================================================================
-
-_cudart = None
-
-def _get_cudart():
-    global _cudart
-    if _cudart is not None:
-        return _cudart
-    names = (
-        ["cudart64_120.dll", "cudart64_12.dll", "cudart64_110.dll"]
-        if sys.platform == "win32"
-        else ["libcudart.so.12", "libcudart.so.11", "libcudart.so"]
-    )
-    for name in names:
-        try:
-            lib = ctypes.CDLL(name)
-            lib.cudaMalloc.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_size_t]
-            lib.cudaMalloc.restype  = ctypes.c_int
-            lib.cudaFree.argtypes   = [ctypes.c_void_p]
-            lib.cudaFree.restype    = ctypes.c_int
-            _cudart = lib
-            return lib
-        except OSError:
-            pass
-    raise RuntimeError("Could not load CUDA runtime library (cudart)")
-
-def _cuda_malloc(ptr_ref, size):
-    _get_cudart().cudaMalloc(ptr_ref, size)
-
-def _cuda_free(ptr):
-    if ptr.value:
-        _get_cudart().cudaFree(ptr)
-        ptr.value = None
 
 
 # ============================================================================
@@ -146,30 +111,6 @@ _lib.compute_minimum_distance_indexed.argtypes = [
 ]
 _lib.compute_minimum_distance_indexed.restype = None
 
-# --- Mid-level: GJK ---
-
-_lib.allocate_and_copy_device_arrays.argtypes = [
-    ctypes.c_int,                    # n
-    ctypes.POINTER(gkPolytope),      # bd1 (host)
-    ctypes.POINTER(gkPolytope),      # bd2 (host)
-    ctypes.POINTER(ctypes.c_void_p), # d_bd1 (out)
-    ctypes.POINTER(ctypes.c_void_p), # d_bd2 (out)
-    ctypes.POINTER(ctypes.c_void_p), # d_coord1 (out)
-    ctypes.POINTER(ctypes.c_void_p), # d_coord2 (out)
-    ctypes.POINTER(ctypes.c_void_p), # d_simplices (out)
-    ctypes.POINTER(ctypes.c_void_p), # d_distances (out)
-]
-_lib.allocate_and_copy_device_arrays.restype = None
-
-_lib.compute_minimum_distance_device.argtypes = [
-    ctypes.c_int,    # n
-    ctypes.c_void_p, # d_bd1
-    ctypes.c_void_p, # d_bd2
-    ctypes.c_void_p, # d_simplices
-    ctypes.c_void_p, # d_distances
-]
-_lib.compute_minimum_distance_device.restype = None
-
 _lib.copy_results_from_device.argtypes = [
     ctypes.c_int,               # n
     ctypes.c_void_p,            # d_simplices
@@ -178,36 +119,6 @@ _lib.copy_results_from_device.argtypes = [
     ctypes.POINTER(gkFloat),    # distances (host out)
 ]
 _lib.copy_results_from_device.restype = None
-
-_lib.free_device_arrays.argtypes = [
-    ctypes.c_void_p, # d_bd1
-    ctypes.c_void_p, # d_bd2
-    ctypes.c_void_p, # d_coord1
-    ctypes.c_void_p, # d_coord2
-    ctypes.c_void_p, # d_simplices
-    ctypes.c_void_p, # d_distances
-]
-_lib.free_device_arrays.restype = None
-
-# --- Mid-level: EPA ---
-
-_lib.allocate_epa_device_arrays.argtypes = [
-    ctypes.c_int,                    # n
-    ctypes.POINTER(ctypes.c_void_p), # d_witness1 (out)
-    ctypes.POINTER(ctypes.c_void_p), # d_witness2 (out)
-    ctypes.POINTER(ctypes.c_void_p), # d_contact_normals (out, nullable)
-]
-_lib.allocate_epa_device_arrays.restype = None
-
-_lib.compute_epa_device.argtypes = [
-    ctypes.c_int,    # n
-    ctypes.c_void_p, # d_bd1
-    ctypes.c_void_p, # d_bd2
-    ctypes.c_void_p, # d_simplices (witnesses -> simplices[i].witnesses[0/1])
-    ctypes.c_void_p, # d_distances
-    ctypes.c_void_p, # d_contact_normals
-]
-_lib.compute_epa_device.restype = None
 
 _lib.copy_epa_results_from_device.argtypes = [
     ctypes.c_int,            # n
@@ -219,13 +130,6 @@ _lib.copy_epa_results_from_device.argtypes = [
     ctypes.POINTER(gkFloat), # contact_normals (host out, nullable)
 ]
 _lib.copy_epa_results_from_device.restype = None
-
-_lib.free_epa_device_arrays.argtypes = [
-    ctypes.c_void_p, # d_witness1
-    ctypes.c_void_p, # d_witness2
-    ctypes.c_void_p, # d_contact_normals (nullable)
-]
-_lib.free_epa_device_arrays.restype = None
 
 # --- High-level: EPA ---
 
@@ -251,13 +155,28 @@ _lib.compute_gjk_epa.restype = None
 
 # --- Mid-level: indexed pool ---
 
-_lib.allocate_and_copy_indexed_polytopes.argtypes = [
+_lib.allocate_indexed_device.argtypes = [
     ctypes.c_int,                    # num_polytopes
+    ctypes.c_int,                    # max_pairs
     ctypes.POINTER(gkPolytope),      # polytopes (host)
     ctypes.POINTER(ctypes.c_void_p), # d_polytopes (out)
     ctypes.POINTER(ctypes.c_void_p), # d_coords (out)
+    ctypes.POINTER(ctypes.c_void_p), # d_pairs (out)
+    ctypes.POINTER(ctypes.c_void_p), # d_simplices (out)
+    ctypes.POINTER(ctypes.c_void_p), # d_distances (out)
+    ctypes.POINTER(ctypes.c_void_p), # d_contact_normals (out, nullable)
 ]
-_lib.allocate_and_copy_indexed_polytopes.restype = None
+_lib.allocate_indexed_device.restype = None
+
+_lib.free_indexed_device.argtypes = [
+    ctypes.c_void_p, # d_polytopes
+    ctypes.c_void_p, # d_coords
+    ctypes.c_void_p, # d_pairs
+    ctypes.c_void_p, # d_simplices
+    ctypes.c_void_p, # d_distances
+    ctypes.c_void_p, # d_contact_normals (nullable)
+]
+_lib.free_indexed_device.restype = None
 
 _lib.upload_pairs_device.argtypes = [
     ctypes.c_int,                    # num_pairs
@@ -369,33 +288,29 @@ class GpuBatch:
         self.max_pairs = max_pairs
         self._with_epa = with_epa
 
-        # Upload pool to device once
-        self._d_polytopes = ctypes.c_void_p()
-        self._d_coords    = ctypes.c_void_p()
-        _lib.allocate_and_copy_indexed_polytopes(
+        # Allocate and upload pool + result buffers to device in one call
+        self._d_polytopes       = ctypes.c_void_p()
+        self._d_coords          = ctypes.c_void_p()
+        self._d_pairs           = ctypes.c_void_p()
+        self._d_simplices       = ctypes.c_void_p()
+        self._d_distances       = ctypes.c_void_p()
+        self._d_contact_normals = ctypes.c_void_p()
+        _lib.allocate_indexed_device(
             self._bd.n,
+            max_pairs,
             self._bd.as_ptr(),
             ctypes.byref(self._d_polytopes),
             ctypes.byref(self._d_coords),
+            ctypes.byref(self._d_pairs),
+            ctypes.byref(self._d_simplices),
+            ctypes.byref(self._d_distances),
+            ctypes.byref(self._d_contact_normals) if with_epa else None,
         )
 
-        # Pre-allocate device buffers sized for max_pairs
-        self._d_pairs     = ctypes.c_void_p()
-        self._d_simplices = ctypes.c_void_p()
-        self._d_distances = ctypes.c_void_p()
-        _cuda_malloc(ctypes.byref(self._d_pairs),     max_pairs * ctypes.sizeof(gkCollisionPair))
-        _cuda_malloc(ctypes.byref(self._d_simplices), max_pairs * ctypes.sizeof(gkSimplex))
-        _cuda_malloc(ctypes.byref(self._d_distances), max_pairs * ctypes.sizeof(gkFloat))
-
         # Host result buffers (reused across calls)
-        self._simplices = SimplexArray(max_pairs)
-        self._distances = np.zeros(max_pairs, dtype=DTYPE)
-
-        # EPA device + host buffers
-        self._d_contact_normals = ctypes.c_void_p()
-        self._contact_normals   = np.empty((max_pairs, 3), dtype=DTYPE)
-        if with_epa:
-            _cuda_malloc(ctypes.byref(self._d_contact_normals), max_pairs * 3 * ctypes.sizeof(gkFloat))
+        self._simplices       = SimplexArray(max_pairs)
+        self._distances       = np.zeros(max_pairs, dtype=DTYPE)
+        self._contact_normals = np.empty((max_pairs, 3), dtype=DTYPE)
 
     def _upload_pairs(self, pairs: np.ndarray) -> int:
         pairs = np.ascontiguousarray(pairs, dtype=np.int32)
@@ -455,8 +370,8 @@ class GpuBatch:
         )
         _lib.copy_epa_results_from_device(
             n,
-            ctypes.c_void_p(), ctypes.c_void_p(), self._d_contact_normals,
-            ctypes.c_void_p(), ctypes.c_void_p(),
+            None, None, self._d_contact_normals,
+            None, None,
             self._contact_normals.ctypes.data_as(ctypes.POINTER(gkFloat)),
         )
         witnesses1, witnesses2 = self._simplices.extract(n)
@@ -468,11 +383,15 @@ class GpuBatch:
         }
 
     def __del__(self):
-        for attr in ('_d_polytopes', '_d_coords', '_d_pairs', '_d_simplices', '_d_distances'):
-            if hasattr(self, attr):
-                _cuda_free(getattr(self, attr))
-        if hasattr(self, '_with_epa') and self._with_epa:
-            _cuda_free(self._d_contact_normals)
+        if hasattr(self, '_d_polytopes'):
+            _lib.free_indexed_device(
+                self._d_polytopes,
+                self._d_coords,
+                self._d_pairs,
+                self._d_simplices,
+                self._d_distances,
+                self._d_contact_normals if self._with_epa else None,
+            )
 
 
 # ============================================================================
