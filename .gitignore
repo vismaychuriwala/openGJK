@@ -3,7 +3,6 @@ build*/*
 *.so
 public/
 *.exe
-venv
 
 # Eclispe setting --- do not ignore *.cproject and *.project
 */**/.settings
