@@ -19,7 +19,7 @@ from typing import List, Union
 # Precision
 # ============================================================================
 
-USE_32BITS = False  # Must match USE_32BITS compile flag
+USE_32BITS = True  # Must match USE_32BITS compile flag
 
 if USE_32BITS:
     gkFloat = ctypes.c_float

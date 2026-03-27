@@ -4,7 +4,7 @@ import os
 from typing import NamedTuple, Tuple, List
 
 # Must match USE_32BITS compile flag (default: OFF for scalar)
-USE_32BITS = False
+USE_32BITS = True
 
 gkFloat = c_float if USE_32BITS else c_double
 
