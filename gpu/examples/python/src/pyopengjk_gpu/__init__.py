@@ -9,9 +9,7 @@ from .opengjk_gpu import (
     PolytopeArray,
     SimplexArray,
     GpuBatch,
-    IndexedBatch,
     compute_minimum_distance,
-    compute_minimum_distance_indexed,
     compute_epa,
     compute_gjk_epa,
 )
@@ -22,9 +20,7 @@ __all__ = [
     "PolytopeArray",
     "SimplexArray",
     "GpuBatch",
-    "IndexedBatch",
     "compute_minimum_distance",
-    "compute_minimum_distance_indexed",
     "compute_epa",
     "compute_gjk_epa",
 ]

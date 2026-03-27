@@ -99,18 +99,6 @@ _lib = ctypes.CDLL(_find_library())
 # Function Signatures
 # ============================================================================
 
-# --- High-level (used only for indexed, which has no mid-level equivalent) ---
-
-_lib.compute_minimum_distance_indexed.argtypes = [
-    ctypes.c_int,                    # num_polytopes
-    ctypes.c_int,                    # num_pairs
-    ctypes.POINTER(gkPolytope),      # polytopes
-    ctypes.POINTER(gkCollisionPair), # pairs
-    ctypes.POINTER(gkSimplex),       # simplices
-    ctypes.POINTER(gkFloat),         # distances
-]
-_lib.compute_minimum_distance_indexed.restype = None
-
 _lib.copy_results_from_device.argtypes = [
     ctypes.c_int,               # n
     ctypes.c_void_p,            # d_simplices
@@ -412,54 +400,6 @@ def _to_polytope_array(v) -> PolytopeArray:
 
 
 # ============================================================================
-# Indexed Batch
-# ============================================================================
-
-class IndexedBatch:
-    """
-    Holds a pool of polytopes for repeated indexed GJK queries.
-
-    Packs vertex data into a contiguous host buffer once at construction.
-    Call compute(pairs) with different pair index arrays — of any size — to
-    run GJK without re-packing vertex data each time.
-
-    Args:
-        polytopes: PolytopeArray, (M, D, 3) ndarray, or list of (V_i, 3) arrays
-    """
-
-    def __init__(self, polytopes: Union['PolytopeArray', np.ndarray, list]):
-        self._bd = _to_polytope_array(polytopes)
-
-    def compute(self, pairs: np.ndarray) -> dict:
-        """
-        Run GJK for the given index pairs.
-
-        Args:
-            pairs: (n_pairs, 2) int32 array of indices into the polytope pool
-
-        Returns:
-            Same keys as GpuBatch.compute_gjk().
-        """
-        pairs = np.ascontiguousarray(pairs, dtype=np.int32).reshape(-1, 2)
-        num_pairs = pairs.shape[0]
-        simplices = SimplexArray(num_pairs)
-        distances = np.zeros(num_pairs, dtype=DTYPE)
-        _lib.compute_minimum_distance_indexed(
-            self._bd.n, num_pairs, self._bd.as_ptr(),
-            pairs.ctypes.data_as(ctypes.POINTER(gkCollisionPair)),
-            simplices.as_ptr(),
-            distances.ctypes.data_as(ctypes.POINTER(gkFloat)),
-        )
-        witnesses1, witnesses2 = simplices.extract()
-        return {
-            'distances':    distances,
-            'witnesses1':   witnesses1,
-            'witnesses2':   witnesses2,
-            'is_collision': np.abs(distances) < 1e-6,
-        }
-
-
-# ============================================================================
 # Public API
 # ============================================================================
 
@@ -488,40 +428,6 @@ def compute_minimum_distance(
     distances = np.zeros(n, dtype=DTYPE)
     _lib.compute_minimum_distance(
         n, bd1.as_ptr(), bd2.as_ptr(),
-        simplices.as_ptr(),
-        distances.ctypes.data_as(ctypes.POINTER(gkFloat)),
-    )
-    witnesses1, witnesses2 = simplices.extract()
-    return {
-        'distances':    distances,
-        'witnesses1':   witnesses1,
-        'witnesses2':   witnesses2,
-        'is_collision': np.abs(distances) < 1e-6,
-    }
-
-
-def compute_minimum_distance_indexed(
-    polytopes: Union['PolytopeArray', np.ndarray, list],
-    pairs: np.ndarray,
-) -> dict:
-    """
-    Compute distances for indexed polytope pairs.
-
-    Args:
-        polytopes: PolytopeArray, (M, V, 3) ndarray, or list of (V_i, 3) arrays
-        pairs:     (num_pairs, 2) int32 array of polytope index pairs
-
-    Returns:
-        Same keys as compute_minimum_distance.
-    """
-    bd = _to_polytope_array(polytopes)
-    pairs = np.ascontiguousarray(pairs, dtype=np.int32).reshape(-1, 2)
-    num_pairs = pairs.shape[0]
-    simplices = SimplexArray(num_pairs)
-    distances = np.zeros(num_pairs, dtype=DTYPE)
-    _lib.compute_minimum_distance_indexed(
-        bd.n, num_pairs, bd.as_ptr(),
-        pairs.ctypes.data_as(ctypes.POINTER(gkCollisionPair)),
         simplices.as_ptr(),
         distances.ctypes.data_as(ctypes.POINTER(gkFloat)),
     )
@@ -623,9 +529,7 @@ __all__ = [
     "PolytopeArray",
     "SimplexArray",
     "GpuBatch",
-    "IndexedBatch",
     "compute_minimum_distance",
-    "compute_minimum_distance_indexed",
     "compute_epa",
     "compute_gjk_epa",
 ]

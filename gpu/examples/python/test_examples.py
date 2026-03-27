@@ -4,9 +4,8 @@ Recreates the test cases from OpenGJK-GPU repository
 
 This demonstrates:
 1. Simple GJK (single pair)
-2. Batch array processing
-3. Indexed API
-4. EPA collision tests
+2. Batch array processing with GpuBatch indexed API
+3. EPA collision tests
 """
 
 import numpy as np
@@ -15,7 +14,6 @@ from pyopengjk_gpu import (
     USE_32BITS,
     GpuBatch,
     PolytopeArray,
-    IndexedBatch,
     compute_minimum_distance,
 )
 
@@ -299,13 +297,13 @@ def test_2_batch_array():
     distances_nonindexed = result_nonindexed['distances']
     print(f"  Distance range: [{distances_nonindexed.min():.3f}, {distances_nonindexed.max():.3f}]")
 
-    # Method 2: Indexed API using IndexedBatch
+    # Method 2: GpuBatch indexed API — pool stays on GPU between queries
     # Interlace: [p1[0], p2[0], p1[1], p2[1], ...]
     polytopes_interlaced = [p for pair in zip(polytopes1, polytopes2) for p in pair]
     pairs = np.array([[2*i, 2*i+1] for i in range(num_pairs)], dtype=np.int32)
 
-    print(f"\nMethod 2: Indexed API (IndexedBatch — pack once, query twice)")
-    pool = IndexedBatch(polytopes_interlaced)
+    print(f"\nMethod 2: GpuBatch indexed API (pool uploaded once, queried twice)")
+    pool = GpuBatch(polytopes_interlaced, num_pairs)
 
     # Query 1: pairs in original order [i, j]
     start = time.time()
@@ -316,7 +314,7 @@ def test_2_batch_array():
     print(f"  Query 1 (original order):    {time_q1*1000:.2f} ms  "
           f"range [{distances_indexed.min():.3f}, {distances_indexed.max():.3f}]")
 
-    # Query 2: pairs in a random permutation (different size: first half only)
+    # Query 2: pairs in a random permutation
     perm = np.random.permutation(num_pairs)
     pairs_permuted = pairs[perm]
     start = time.time()
@@ -347,7 +345,7 @@ def test_2_batch_array():
     perm_max_diff = np.max(np.abs(distances_indexed[perm] - distances_permuted))
     print(f"  Max difference: {perm_max_diff:.9f}")
     if perm_max_diff < tolerance:
-        print_pass(f"IndexedBatch returns consistent results regardless of pair ordering")
+        print_pass(f"GpuBatch returns consistent results regardless of pair ordering")
     else:
         print_fail(f"Permuted query inconsistent (max diff: {perm_max_diff:.9f})")
 
