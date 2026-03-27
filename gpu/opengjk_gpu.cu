@@ -50,6 +50,16 @@
 #define MAX_EPA_VERTICES (MAX_EPA_FACES + 4)
 #define MAX_HORIZON_PER_THREAD (((MAX_EPA_FACES + THREADS_PER_EPA - 1) / THREADS_PER_EPA) * 3)
 
+// EPA groups per block limited by 48KB shared memory default per block:
+//   float:  sizeof(EPAPolytope) ~ 9816 bytes  -> 4 groups (4*9816=39264 < 49152)
+//   double: sizeof(EPAPolytope) ~ 14480 bytes -> 3 groups (3*14480=43440 < 49152)
+#ifdef USE_32BITS
+#define EPA_GROUPS_PER_BLOCK 4
+#else
+#define EPA_GROUPS_PER_BLOCK 3
+#endif
+#define BLOCK_SIZE_EPA (EPA_GROUPS_PER_BLOCK * THREADS_PER_EPA)
+
 #define getCoord(body, index, component) body->coord[(index) * 3 + (component)]
 
 #define norm2(a) (a[0] * a[0] + a[1] * a[1] + a[2] * a[2])
@@ -2340,7 +2350,8 @@ __device__ __forceinline__ void epa_core(
       int other_face = __shfl_down_sync(group_mask, local_closest_face, offset);
       
       if (other_face >= 0 && (local_closest_face < 0 || other_dist < local_closest_distance ||
-          (other_dist == local_closest_distance && other_face < local_closest_face))) {
+          (other_dist == local_closest_distance &&
+           poly->faces[other_face].v[0] < poly->faces[local_closest_face].v[0]))) {
         local_closest_distance = other_dist;
         local_closest_face = other_face;
       }
@@ -2987,9 +2998,8 @@ void compute_epa_device(
     gkFloat* d_distances,
     gkFloat* d_contact_normals) {
 
-    // 4 groups of 32 threads = 128 threads/block, smem = 4*9816 = 39264 bytes < 48KB default
-    int blockSize = 128;
-    int collisionsPerBlock = blockSize / THREADS_PER_EPA;
+    const int blockSize = BLOCK_SIZE_EPA;
+    const int collisionsPerBlock = EPA_GROUPS_PER_BLOCK;
     int numBlocks = (n + collisionsPerBlock - 1) / collisionsPerBlock;
 
     int smem_size = collisionsPerBlock * (int)sizeof(EPAPolytope);
@@ -3146,8 +3156,8 @@ void compute_epa_indexed_device(
     gkFloat* d_distances,
     gkFloat* d_contact_normals) {
 
-    int blockSize = 128;
-    int collisionsPerBlock = blockSize / THREADS_PER_EPA;
+    const int blockSize = BLOCK_SIZE_EPA;
+    const int collisionsPerBlock = EPA_GROUPS_PER_BLOCK;
     int numBlocks = (num_pairs + collisionsPerBlock - 1) / collisionsPerBlock;
 
     int smem_size = collisionsPerBlock * (int)sizeof(EPAPolytope);
@@ -3271,4 +3281,31 @@ void compute_gjk_epa_indexed(
 
     cudaFree(d_polytopes); cudaFree(d_coords); cudaFree(d_pairs);
     cudaFree(d_simplices); cudaFree(d_distances); cudaFree(d_contact_normals);
+}
+
+void allocate_indexed_device(
+    const int num_polytopes, const int max_pairs,
+    const gkPolytope* polytopes,
+    gkPolytope** d_polytopes, gkFloat** d_coords,
+    gkCollisionPair** d_pairs, gkSimplex** d_simplices,
+    gkFloat** d_distances, gkFloat** d_contact_normals) {
+
+    allocate_and_copy_indexed_polytopes(num_polytopes, polytopes, d_polytopes, d_coords);
+    cudaMalloc(d_pairs,     max_pairs * sizeof(gkCollisionPair));
+    cudaMalloc(d_simplices, max_pairs * sizeof(gkSimplex));
+    cudaMalloc(d_distances, max_pairs * sizeof(gkFloat));
+    if (d_contact_normals) cudaMalloc(d_contact_normals, max_pairs * 3 * sizeof(gkFloat));
+}
+
+void free_indexed_device(
+    gkPolytope* d_polytopes, gkFloat* d_coords,
+    gkCollisionPair* d_pairs, gkSimplex* d_simplices,
+    gkFloat* d_distances, gkFloat* d_contact_normals) {
+
+    cudaFree(d_polytopes);
+    cudaFree(d_coords);
+    cudaFree(d_pairs);
+    cudaFree(d_simplices);
+    cudaFree(d_distances);
+    if (d_contact_normals) cudaFree(d_contact_normals);
 }
