@@ -358,21 +358,50 @@ struct gkCollisionPair {
 };
 
 /**
- * @brief Allocate device memory and copy indexed polytope data to GPU.
+ * @brief Allocate all GPU memory for an indexed collision batch in one call.
  *
- * Concatenates all polytope coordinates into a single device buffer and
- * patches device-side coord pointers accordingly.
+ * Uploads the polytope pool to the device and allocates result buffers.
+ * Pass a non-NULL d_contact_normals to also allocate the EPA normals buffer.
  *
- * @param num_polytopes Total number of unique polytopes
- * @param polytopes     Array of all polytopes (host memory)
- * @param d_polytopes   Output: device pointer to polytope array
- * @param d_coords      Output: device pointer to concatenated coordinates
+ * @param num_polytopes     Total number of unique polytopes
+ * @param max_pairs         Maximum collision pairs per compute call
+ * @param polytopes         Array of all polytopes (host memory)
+ * @param d_polytopes       Output: device pointer to polytope array
+ * @param d_coords          Output: device pointer to concatenated coordinates
+ * @param d_pairs           Output: device pointer to collision pairs buffer
+ * @param d_simplices       Output: device pointer to simplex results buffer
+ * @param d_distances       Output: device pointer to distances buffer
+ * @param d_contact_normals Output: device pointer to contact normals (nullable)
  */
-void allocate_and_copy_indexed_polytopes(
+void allocate_indexed_device(
     const int num_polytopes,
+    const int max_pairs,
     const gkPolytope* polytopes,
-    gkPolytope** d_polytopes,
-    gkFloat** d_coords
+    gkPolytope**      d_polytopes,
+    gkFloat**         d_coords,
+    gkCollisionPair** d_pairs,
+    gkSimplex**       d_simplices,
+    gkFloat**         d_distances,
+    gkFloat**         d_contact_normals
+);
+
+/**
+ * @brief Free all device memory allocated by allocate_indexed_device.
+ *
+ * @param d_polytopes       Device pointer to polytope array
+ * @param d_coords          Device pointer to coordinates
+ * @param d_pairs           Device pointer to collision pairs buffer
+ * @param d_simplices       Device pointer to simplex results buffer
+ * @param d_distances       Device pointer to distances buffer
+ * @param d_contact_normals Device pointer to contact normals (nullable)
+ */
+void free_indexed_device(
+    gkPolytope*      d_polytopes,
+    gkFloat*         d_coords,
+    gkCollisionPair* d_pairs,
+    gkSimplex*       d_simplices,
+    gkFloat*         d_distances,
+    gkFloat*         d_contact_normals
 );
 
 /**
