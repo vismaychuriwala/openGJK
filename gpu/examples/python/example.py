@@ -50,11 +50,10 @@ def main():
     print(f"Polytope 2: {len(polytope2)} vertices")
     print()
 
-    # Upload polytopes to GPU once, then compute
-    bd1 = PolytopeArray([polytope1])
-    bd2 = PolytopeArray([polytope2])
-    batch = GpuBatch(bd1, bd2)
-    result = batch.compute_gjk()
+    # Upload polytope pool to GPU once, then compute with index pairs
+    pool = PolytopeArray([polytope1, polytope2])
+    batch = GpuBatch(pool, max_pairs=1)
+    result = batch.compute(np.array([[0, 1]]))
 
     distance = result['distances'][0]
     witness1 = result['witnesses1'][0]

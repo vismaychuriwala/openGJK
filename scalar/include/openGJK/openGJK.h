@@ -31,6 +31,7 @@
 #define OPENGJK_H__
 
 #include <float.h>
+#include <stdbool.h>
 
 #ifdef __cplusplus
 #define restrict
@@ -54,9 +55,17 @@ extern "C" {
 #ifdef USE_32BITS
 #define gkFloat   float
 #define gkEpsilon FLT_EPSILON
+#define gkSqrt sqrtf
+#define gkFmax fmaxf
+#define gkFmin fminf
+#define gkFabs fabsf
 #else
 #define gkFloat   double
 #define gkEpsilon DBL_EPSILON
+#define gkSqrt sqrt
+#define gkFmax fmax
+#define gkFmin fmin
+#define gkFabs fabs
 #endif
 
 /*! @brief Data structure for convex polytopes.
@@ -93,6 +102,38 @@ typedef struct gkSimplex_ {
                               from the final simplex vertices. */
 } gkSimplex;
 
+
+#define MAX_EPA_FACES 128
+
+#define MAX_EPA_VERTICES (MAX_EPA_FACES + 4)
+
+// Face structure for EPA polytope
+// Each face is a triangle with 3 vertex indices
+typedef struct {
+  int v[3];           // Vertex indices in the polytope
+  int v_idx[3][2];    // Original vertex indices from original polytopes for witness computation [vertex][body]
+  gkFloat normal[3];  // Face normal (pointing outward from origin)
+  gkFloat distance;   // Distance from origin to face plane
+  bool valid;         // Whether this face is still valid (not removed)
+} EPAFace;
+
+// Polytope structure for EPA
+typedef struct {
+  gkFloat vertices[MAX_EPA_FACES + 4][3];  // Vertex coordinates in the Minkowski difference
+  int vertex_indices[MAX_EPA_FACES + 4][2]; // Original vertex indices [vertex][body]
+  int num_vertices;
+  EPAFace faces[MAX_EPA_FACES];
+  int max_face_index; // Highest face index in use (for iteration bounds)
+} EPAPolytope;
+
+
+// Structure for horizon edge collection
+typedef struct {
+  int v1, v2;  // Vertex indices in polytope
+  int v_idx1[2], v_idx2[2];  // Original vertex indices for witness computation
+  bool valid;
+} EPAEdge;
+
 /*! @brief Invoke the GJK algorithm to compute the minimum distance between two
  * polytopes.
  *
@@ -108,6 +149,28 @@ typedef struct gkSimplex_ {
  *       Witness points are automatically computed and stored in s->witnesses.
  */
 OPENGJK_EXPORT gkFloat compute_minimum_distance(gkPolytope bd1, gkPolytope bd2, gkSimplex* s);
+
+/*! @brief Invoke the EPA algorithm to compute the collision information between two colliding
+ * polytopes.
+ *
+ * @param[in]     bd1                 First polytope (passed by value, modified internally).
+ * @param[in]     bd2                 Second polytope (passed by value, modified internally).
+ * @param[in,out] s                   Simplex structure. Must be initialized. 
+ *                                    After return, contains the final
+ *                                    simplex and witness points in s->witnesses.
+ * @param[in, out] distance           Takes in the distance computed by the GJK algorithm 
+ *                                    (0 -> collision detected, run EPA), otherwise return early.
+ *                                    After return, stores the penetration distance computed between 
+ *                                    the two polytopes. 
+ * @param[out] contact_normal[3]      Contact normal computed by the EPA algorithm
+ 
+ * Witness points are automatically computed and stored in s->witnesses. */
+OPENGJK_EXPORT void computeCollisionInformation(
+  gkPolytope bd1,
+  gkPolytope bd2,
+  gkSimplex* simplex,
+  gkFloat* distance,
+  gkFloat contact_normal[3]);
 
 /*! @brief Testing wrappers - expose internal functions for cross-validation.
  *

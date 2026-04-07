@@ -7,7 +7,7 @@ name = "pyopengjk-gpu"
 version = "3.0.0"
 authors = [
     { name="Mattia Montanari", email="mattia.montanari@it.ox.ac.uk" },
-    { name="Vismay Churiwala" },
+    { name="Vismay Churiwala", email="vismay@seas.upenn.edu" },
     { name="Marcus Hedlund" },
 ]
 description = "GPU-accelerated GJK/EPA collision detection using CUDA"

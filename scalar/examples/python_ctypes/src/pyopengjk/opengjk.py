@@ -52,6 +52,13 @@ opengjk.compute_minimum_distance.argtypes = [POLYTOPE,
                                              POLYTOPE,
                                              POINTER(SIMPLEX)]
 
+opengjk.computeCollisionInformation.restype = None
+opengjk.computeCollisionInformation.argtypes = [POLYTOPE,
+                                                POLYTOPE,
+                                                POINTER(SIMPLEX),
+                                                POINTER(gkFloat),
+                                                gkFloat * 3]
+
 
 Point3 = NamedTuple("Point3", [("x", float), ("y", float), ("z", float)])
 
@@ -61,6 +68,10 @@ Simplex = NamedTuple("Simplex", [("vertices", List[Point3]),
 
 DistanceResult = NamedTuple("Result", [("distance", float),
                                        ("simplex", Simplex)])
+
+CollisionResult = NamedTuple("CollisionResult", [("penetration_depth", float),
+                                                  ("simplex", Simplex),
+                                                  ("contact_normal", Tuple[float, float, float])])
 
 
 def compute_minimum_distance(vertices0: List[Point3],
@@ -98,3 +109,49 @@ def compute_minimum_distance(vertices0: List[Point3],
                for i in range(simplex.nvrtx)]
     witnesses = (Point3(*simplex.witnesses[0]), Point3(*simplex.witnesses[1]))
     return DistanceResult(distance, Simplex(vertices, indices, witnesses))
+
+
+def compute_collision_information(vertices0: List[Point3],
+                                  vertices1: List[Point3]) -> CollisionResult:
+    """Run GJK then EPA to compute penetration depth, witnesses, and contact normal.
+
+    Args:
+        vertices0: Vertices of the first polytope.
+        vertices1: Vertices of the second polytope.
+
+    Returns:
+        CollisionResult: penetration_depth (negative = penetrating), simplex with
+                         witness points in simplex.witnesses, and contact_normal.
+    """
+    polytope0 = POLYTOPE()
+    polytope0.numpoints = len(vertices0)
+    polytope0.s = (gkFloat * 3)(0, 0, 0)
+    polytope0.coord = (POINTER(gkFloat) * len(vertices0))()
+    for i, vertex in enumerate(vertices0):
+        polytope0.coord[i] = (gkFloat * 3)(*vertex)
+
+    polytope1 = POLYTOPE()
+    polytope1.numpoints = len(vertices1)
+    polytope1.s = (gkFloat * 3)(0, 0, 0)
+    polytope1.coord = (POINTER(gkFloat) * len(vertices1))()
+    for i, vertex in enumerate(vertices1):
+        polytope1.coord[i] = (gkFloat * 3)(*vertex)
+
+    simplex = SIMPLEX()
+    simplex.nvrtx = 0
+    dist_val = gkFloat(opengjk.compute_minimum_distance(polytope0, polytope1, simplex))
+
+    contact_normal = (gkFloat * 3)(0, 0, 0)
+    opengjk.computeCollisionInformation(
+        polytope0, polytope1,
+        ctypes.byref(simplex),
+        ctypes.byref(dist_val),
+        contact_normal,
+    )
+
+    vertices = [Point3(*simplex.vrtx[i]) for i in range(simplex.nvrtx)]
+    indices  = [(simplex.vrtx_idx[i][0], simplex.vrtx_idx[i][1])
+                for i in range(simplex.nvrtx)]
+    witnesses = (Point3(*simplex.witnesses[0]), Point3(*simplex.witnesses[1]))
+    normal = (float(contact_normal[0]), float(contact_normal[1]), float(contact_normal[2]))
+    return CollisionResult(dist_val.value, Simplex(vertices, indices, witnesses), normal)

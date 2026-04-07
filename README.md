@@ -4,11 +4,11 @@
 
 # OpenGJK
 
-A fast and robust implementation of the Gilbert-Johnson-Keerthi (GJK) algorithm for computing minimum distances between convex polytopes. Available in three flavors:
+A fast and robust implementation of the Gilbert-Johnson-Keerthi (GJK) algorithm and Expanding Polytope Algorithm (EPA) for convex collision detection. Available in three flavors:
 
-- **Scalar** (`scalar/`): Portable C implementation with interfaces for C#, Go, Matlab, Python, and Zig
+- **Scalar** (`scalar/`): Portable C implementation of GJK (minimum distance) and EPA (penetration depth, contact normal, witness points), with interfaces for C#, Go, Matlab, Python, and Zig
 - **SIMD** (`simd/`): High-performance C++ implementation using [Google Highway](https://github.com/google/highway) for automatic SIMD acceleration (SSE4, AVX2, AVX-512, NEON)
-- **GPU** (`gpu/`): CUDA implementation with warp-level parallelism for batch collision detection on NVIDIA GPUs
+- **GPU** (`gpu/`): CUDA implementation with warp-level parallelism for batch collision detection on NVIDIA GPUs, including GJK and EPA
 
 A Unity Plug-in [is also available in another repository](https://github.com/MattiaMontanari/urban-couscous).
 
@@ -148,7 +148,7 @@ The GPU implementation uses CUDA for massively parallel collision detection with
 - CMake 3.18 or higher
 
 ```bash
-cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_GPU=ON -DBUILD_SCALAR=OFF -DBUILD_SIMD=OFF
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_GPU=ON -DBUILD_SCALAR=OFF -DBUILD_SIMD=OFF -DBUILD_TESTS=OFF
 cmake --build build --config Release
 cd build/gpu/examples/simple_collision/Release
 ./example_lib_opengjk_gpu.exe
